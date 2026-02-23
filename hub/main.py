@@ -39,11 +39,23 @@ async def submit_task(task: TaskCreate):
         "consumer_id": task.consumer_id,
         "payload": task.payload,
         "bounty": task.bounty,
-        "status": "pending"
+        "status": "pending",
+        "target_node": task.target_node
     }
     active_tasks[task_id] = task_data
     
-    # Broadcast to all connected nodes EXCEPT the consumer
+    # Target specific node if requested (Direct Message)
+    if task.target_node:
+        if task.target_node in connected_nodes:
+            try:
+                await connected_nodes[task.target_node].send_json({"event": "new_task", "data": task_data})
+                return {"status": "success", "task_id": task_id, "routed_to": task.target_node}
+            except:
+                return {"status": "error", "detail": "Target node disconnected"}
+        else:
+            return {"status": "error", "detail": "Target node not currently connected to Hub"}
+
+    # Otherwise, Broadcast to all connected nodes EXCEPT the consumer
     for node_id, ws in list(connected_nodes.items()):
         if node_id != task.consumer_id:
             try:
