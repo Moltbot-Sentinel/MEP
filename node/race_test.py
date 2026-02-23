@@ -13,7 +13,7 @@ import time
 HUB_URL = "http://localhost:8000"
 WS_URL = "ws://localhost:8000"
 
-class RacingMiner:
+class RacingProvider:
     def __init__(self, name, location):
         self.name = name
         self.location = location
@@ -43,7 +43,7 @@ class RacingMiner:
                     self.response_time = time.time() - start_time
                     print(f"[{self.name}] 🏁 GOT THE TASK! Response: {self.response_time:.3f}s")
                     
-                    # Simulate processing (faster miners win)
+                    # Simulate processing (faster providers win)
                     process_time = 0.1 if "fast" in self.name.lower() else 0.5
                     await asyncio.sleep(process_time)
                     
@@ -76,12 +76,12 @@ async def run_race():
     consumer_id = "race-test-consumer"
     requests.post(f"{HUB_URL}/register", json={"pubkey": consumer_id})
     
-    # Create 4 miners in different "locations"
-    miners = [
-        RacingMiner("FastMiner-USA", "New York"),
-        RacingMiner("SlowMiner-EU", "Berlin"),
-        RacingMiner("QuickMiner-Asia", "Singapore"),
-        RacingMiner("SteadyMiner-AU", "Sydney")
+    # Create 4 providers in different "locations"
+    providers = [
+        RacingProvider("FastProvider-USA", "New York"),
+        RacingProvider("SlowProvider-EU", "Berlin"),
+        RacingProvider("QuickProvider-Asia", "Singapore"),
+        RacingProvider("SteadyProvider-AU", "Sydney")
     ]
     
     # Submit a task
@@ -101,9 +101,9 @@ async def run_race():
     task_id = task_data["task_id"]
     print(f"   Task ID: {task_id[:8]}...")
     
-    # Start all miners simultaneously
-    print("\n🏁 Starting miners...")
-    tasks = [miner.compete(task_id, task_payload, bounty) for miner in miners]
+    # Start all providers simultaneously
+    print("\n🏁 Starting providers...")
+    tasks = [provider.compete(task_id, task_payload, bounty) for provider in providers]
     await asyncio.gather(*tasks)
     
     # Results
@@ -112,13 +112,13 @@ async def run_race():
     print("=" * 60)
     
     winner = None
-    for miner in miners:
-        status = "🏆 WINNER" if miner.won_race else "❌ Lost"
-        time_str = f"{miner.response_time:.3f}s" if miner.response_time else "N/A"
-        print(f"{status} {miner.name:20} {miner.location:15} Response: {time_str:8} Balance: {miner.balance}")
+    for provider in providers:
+        status = "🏆 WINNER" if provider.won_race else "❌ Lost"
+        time_str = f"{provider.response_time:.3f}s" if provider.response_time else "N/A"
+        print(f"{status} {provider.name:20} {provider.location:15} Response: {time_str:8} Balance: {provider.balance}")
         
-        if miner.won_race:
-            winner = miner
+        if provider.won_race:
+            winner = provider
     
     if winner:
         print(f"\n🎯 The market chose: {winner.name} from {winner.location}")

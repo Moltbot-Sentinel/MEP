@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MEP Race Test FIXED: Ensure task is broadcast AFTER all miners connect.
+MEP Race Test FIXED: Ensure task is broadcast AFTER all providers connect.
 """
 import asyncio
 import websockets
@@ -12,7 +12,7 @@ import time
 HUB_URL = "http://localhost:8000"
 WS_URL = "ws://localhost:8000"
 
-class RacingMiner:
+class RacingProvider:
     def __init__(self, name, location):
         self.name = name
         self.location = location
@@ -71,18 +71,18 @@ async def run_race():
     print("MEP GLOBAL RACE TEST: Real Competition")
     print("=" * 60)
     
-    # Create miners
-    miners = [
-        RacingMiner("FastMiner-USA", "New York"),
-        RacingMiner("SlowMiner-EU", "Berlin"),
-        RacingMiner("QuickMiner-Asia", "Singapore"),
-        RacingMiner("SteadyMiner-AU", "Sydney")
+    # Create providers
+    providers = [
+        RacingProvider("FastProvider-USA", "New York"),
+        RacingProvider("SlowProvider-EU", "Berlin"),
+        RacingProvider("QuickProvider-Asia", "Singapore"),
+        RacingProvider("SteadyProvider-AU", "Sydney")
     ]
     
-    # Connect ALL miners first
-    print("\n🔗 Connecting miners to hub...")
-    for miner in miners:
-        await miner.connect()
+    # Connect ALL providers first
+    print("\n🔗 Connecting providers to hub...")
+    for provider in providers:
+        await provider.connect()
     
     await asyncio.sleep(0.5)  # Ensure all connected
     
@@ -90,10 +90,10 @@ async def run_race():
     consumer_id = "race-consumer-v2"
     requests.post(f"{HUB_URL}/register", json={"pubkey": consumer_id})
     
-    task_payload = "Which miner is fastest in the MEP race?"
+    task_payload = "Which provider is fastest in the MEP race?"
     bounty = 7.5
     
-    print(f"\n📤 Broadcasting task to {len(miners)} connected miners...")
+    print(f"\n📤 Broadcasting task to {len(providers)} connected providers...")
     print(f"   Task: {task_payload}")
     print(f"   Bounty: {bounty} SECONDS")
     
@@ -106,20 +106,20 @@ async def run_race():
     task_id = resp.json()["task_id"]
     print(f"   Task ID: {task_id[:8]}...")
     
-    # All miners listen simultaneously
-    print("\n🏁 ALL MINERS LISTENING... RACE STARTS!")
-    results = await asyncio.gather(*[miner.listen_for_task(task_id, bounty) for miner in miners])
+    # All providers listen simultaneously
+    print("\n🏁 ALL PROVIDERS LISTENING... RACE STARTS!")
+    results = await asyncio.gather(*[provider.listen_for_task(task_id, bounty) for provider in providers])
     
     # Close connections
-    for miner in miners:
-        await miner.close()
+    for provider in providers:
+        await provider.close()
     
     # Results
     print("\n" + "=" * 60)
     print("RACE RESULTS:")
     print("=" * 60)
     
-    winners = [m for m in miners if m.won_race]
+    winners = [m for m in providers if m.won_race]
     
     if winners:
         winner = winners[0]  # First to finish
@@ -130,10 +130,10 @@ async def run_race():
         
         # Show all times
         print(f"\n📊 All response times:")
-        for miner in miners:
-            if miner.response_time:
-                status = "✅ WON" if miner.won_race else "❌ Lost"
-                print(f"   {status} {miner.name:20} {miner.response_time:.3f}s")
+        for provider in providers:
+            if provider.response_time:
+                status = "✅ WON" if provider.won_race else "❌ Lost"
+                print(f"   {status} {provider.name:20} {provider.response_time:.3f}s")
     else:
         print("❌ No winner - check hub logs")
     

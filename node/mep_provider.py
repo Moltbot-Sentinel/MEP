@@ -17,7 +17,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HUB_URL = "http://localhost:8000"
 WS_URL = "ws://localhost:8000"
 
-class MEPMiner:
+class MEPProvider:
     def __init__(self, node_id: str):
         self.node_id = node_id
         self.balance = 0.0
@@ -154,18 +154,18 @@ Would you like me to elaborate on any specific aspect?"""
 
 async def main():
     # Create a miner with unique ID
-    miner_id = f"mep-miner-{uuid.uuid4().hex[:8]}"
-    miner = MEPMiner(miner_id)
+    provider_id = f"mep-provider-{uuid.uuid4().hex[:8]}"
+    miner = MEPProvider(provider_id)
     
     try:
         await miner.connect()
     except KeyboardInterrupt:
         miner.stop()
-        print("\n[MEP] Mining stopped by user")
+        print("\n[MEP] Contribution stopped by user")
 
 if __name__ == "__main__":
     print("=" * 60)
     print("Miao Exchange Protocol (MEP) Miner")
-    print("Earn SECONDS by processing tasks while you sleep")
+    print("Earn SECONDS by contributing idle compute")
     print("=" * 60)
     asyncio.run(main())
