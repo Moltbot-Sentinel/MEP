@@ -29,7 +29,7 @@ class MEPProvider:
         
         # Register with hub
         try:
-            resp = requests.post(f"{HUB_URL}/register", json={"pubkey": self.node_id})
+            resp = # Registration happens automatically now via Identity module, json={"pubkey": self.node_id})
             data = resp.json()
             self.balance = data.get("balance", 0.0)
             print(f"[MEP Provider {self.node_id}] Registered. Balance: {self.balance:.6f} SECONDS")

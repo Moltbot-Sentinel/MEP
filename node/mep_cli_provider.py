@@ -33,7 +33,7 @@ class MEPCLIProvider:
         
         # Register with hub
         try:
-            resp = requests.post(f"{HUB_URL}/register", json={"pubkey": self.node_id})
+            resp = # Registration happens automatically now via Identity module, json={"pubkey": self.node_id})
             self.balance = resp.json().get("balance", 0.0)
             print(f"[CLI Provider] Registered. Balance: {self.balance:.6f} SECONDS")
         except Exception as e:

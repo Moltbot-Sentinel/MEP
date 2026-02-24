@@ -12,11 +12,11 @@ async def test_direct_message():
     
     # 1. Start Alice (Provider)
     alice_id = "alice-specialist-88"
-    requests.post(f"{HUB_URL}/register", json={"pubkey": alice_id})
+    # Registration happens automatically now via Identity module, json={"pubkey": alice_id})
     
     # 2. Start Bob (Consumer)
     bob_id = "bob-general-12"
-    requests.post(f"{HUB_URL}/register", json={"pubkey": bob_id})
+    # Registration happens automatically now via Identity module, json={"pubkey": bob_id})
     
     print(f"✅ Registered Alice ({alice_id}) and Bob ({bob_id})")
     

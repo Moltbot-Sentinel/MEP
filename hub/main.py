@@ -1,24 +1,43 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, Header
 from typing import Dict, List
 import uuid
 import db
+import auth
 
 from models import NodeRegistration, TaskCreate, TaskResult, NodeBalance, TaskBid
 
-app = FastAPI(title="Chronos Protocol L1 Hub", description="The Time Exchange Clearinghouse", version="0.1.1")
+app = FastAPI(title="Chronos Protocol L1 Hub", description="The Time Exchange Clearinghouse", version="0.1.2")
 
 # In-memory storage for active tasks
 active_tasks: Dict[str, dict] = {} # task_id -> task_details
 completed_tasks: Dict[str, dict] = {} # task_id -> result
 connected_nodes: Dict[str, WebSocket] = {} # node_id -> websocket
 
+# --- IDENTITY VERIFICATION MIDDLEWARE ---
+async def verify_request(
+    request: Request,
+    x_mep_nodeid: str = Header(...),
+    x_mep_timestamp: str = Header(...),
+    x_mep_signature: str = Header(...)
+) -> str:
+    body = await request.body()
+    payload_str = body.decode('utf-8')
+    
+    pub_pem = db.get_pub_pem(x_mep_nodeid)
+    if not pub_pem:
+        raise HTTPException(status_code=401, detail="Unknown Node ID. Please register first.")
+        
+    if not auth.verify_signature(pub_pem, payload_str, x_mep_timestamp, x_mep_signature):
+        raise HTTPException(status_code=401, detail="Invalid cryptographic signature.")
+        
+    return x_mep_nodeid
+
 @app.post("/register")
 async def register_node(node: NodeRegistration):
-    balance = db.get_balance(node.pubkey)
-    if balance is None:
-        db.set_balance(node.pubkey, 10.0) # Starter bonus
-        balance = 10.0
-    return {"status": "success", "node_id": node.pubkey, "balance": balance}
+    # Registration derives the Node ID from the provided Public Key PEM
+    node_id = auth.derive_node_id(node.pubkey)
+    balance = db.register_node(node_id, node.pubkey)
+    return {"status": "success", "node_id": node_id, "balance": balance}
 
 @app.get("/balance/{node_id}")
 async def get_balance(node_id: str):
@@ -27,8 +46,14 @@ async def get_balance(node_id: str):
         raise HTTPException(status_code=404, detail="Node not found")
     return {"node_id": node_id, "balance_seconds": balance}
 
+from fastapi import Depends
+
 @app.post("/tasks/submit")
-async def submit_task(task: TaskCreate):
+async def submit_task(task: TaskCreate, authenticated_node: str = Depends(verify_request)):
+    # Verify the signer is actually the consumer claiming to submit the task
+    if authenticated_node != task.consumer_id:
+        raise HTTPException(status_code=403, detail="Cannot submit tasks on behalf of another node")
+        
     consumer_balance = db.get_balance(task.consumer_id)
     if consumer_balance is None:
         raise HTTPException(status_code=404, detail="Consumer node not found")
@@ -86,7 +111,10 @@ async def submit_task(task: TaskCreate):
     return {"status": "success", "task_id": task_id}
 
 @app.post("/tasks/bid")
-async def place_bid(bid: TaskBid):
+async def place_bid(bid: TaskBid, authenticated_node: str = Depends(verify_request)):
+    if authenticated_node != bid.provider_id:
+        raise HTTPException(status_code=403, detail="Cannot bid on behalf of another node")
+        
     task = active_tasks.get(bid.task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found or already completed")
@@ -107,7 +135,10 @@ async def place_bid(bid: TaskBid):
     }
 
 @app.post("/tasks/complete")
-async def complete_task(result: TaskResult):
+async def complete_task(result: TaskResult, authenticated_node: str = Depends(verify_request)):
+    if authenticated_node != result.provider_id:
+        raise HTTPException(status_code=403, detail="Cannot complete tasks on behalf of another node")
+        
     task = active_tasks.get(result.task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found or already claimed")
@@ -156,7 +187,16 @@ async def complete_task(result: TaskResult):
     return {"status": "success", "earned": task["bounty"], "new_balance": db.get_balance(result.provider_id)}
 
 @app.websocket("/ws/{node_id}")
-async def websocket_endpoint(websocket: WebSocket, node_id: str):
+async def websocket_endpoint(websocket: WebSocket, node_id: str, timestamp: str, signature: str):
+    pub_pem = db.get_pub_pem(node_id)
+    if not pub_pem:
+        await websocket.close(code=4001, reason="Unknown Node ID")
+        return
+        
+    if not auth.verify_signature(pub_pem, node_id, timestamp, signature):
+        await websocket.close(code=4002, reason="Invalid Signature")
+        return
+        
     await websocket.accept()
     connected_nodes[node_id] = websocket
     try:
