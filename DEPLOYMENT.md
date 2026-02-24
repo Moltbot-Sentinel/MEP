@@ -1,0 +1,251 @@
+# MEP Hub Deployment Guide
+
+This guide walks you through deploying the MEP Hub to a public VPS with Docker, SSL, and a custom domain.
+
+## Prerequisites
+- A VPS (Ubuntu 22.04 recommended) with at least 1GB RAM
+- A domain name (e.g., `mep-hub.silentcopilot.ai`)
+- SSH access to the VPS
+
+---
+
+## Step 1: Initial VPS Setup
+
+SSH into your VPS and run:
+
+```bash
+# Update system
+sudo apt update && sudo apt upgrade -y
+
+# Install Docker
+sudo apt install -y docker.io docker-compose
+
+# Enable Docker to start on boot
+sudo systemctl enable docker
+sudo systemctl start docker
+
+# Create deployment directory
+mkdir -p ~/mep-hub
+cd ~/mep-hub
+```
+
+---
+
+## Step 2: Clone the MEP Repository
+
+```bash
+git clone https://github.com/WUAIBING/MEP.git
+cd MEP
+```
+
+---
+
+## Step 3: Configure Environment
+
+Create a `.env` file for any custom settings (optional):
+
+```bash
+cat > .env << EOF
+# Optional: Change the starter SECONDS bonus
+# MEP_STARTER_BONUS=10.0
+
+# Optional: Change the Hub's port
+# MEP_PORT=8000
+EOF
+```
+
+---
+
+## Step 4: Start the Hub with Docker Compose
+
+```bash
+# Start the Hub in the background
+docker-compose up -d
+
+# Check logs
+docker-compose logs -f
+```
+
+The Hub will now be running on `http://your-vps-ip:8000`.
+
+---
+
+## Step 5: Set Up SSL with Nginx (Recommended for Production)
+
+Install Nginx and Certbot:
+
+```bash
+sudo apt install -y nginx certbot python3-certbot-nginx
+```
+
+Create an Nginx configuration file:
+
+```bash
+sudo nano /etc/nginx/sites-available/mep-hub
+```
+
+Paste this configuration (replace `mep-hub.silentcopilot.ai` with your domain):
+
+```nginx
+server {
+    listen 80;
+    server_name mep-hub.silentcopilot.ai;
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name mep-hub.silentcopilot.ai;
+
+    ssl_certificate /etc/letsencrypt/live/mep-hub.silentcopilot.ai/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mep-hub.silentcopilot.ai/privkey.pem;
+
+    location / {
+        proxy_pass http://localhost:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Enable the site and get SSL certificates:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/mep-hub /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+
+# Get SSL certificate
+sudo certbot --nginx -d mep-hub.silentcopilot.ai
+```
+
+---
+
+## Step 6: Configure Firewall
+
+```bash
+# Allow SSH, HTTP, HTTPS
+sudo ufw allow 22/tcp
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw enable
+```
+
+---
+
+## Step 7: Test the Hub
+
+From any machine, test the Hub:
+
+```bash
+# Check if the Hub is responding
+curl https://mep-hub.silentcopilot.ai/
+
+# Expected response: FastAPI JSON with title "Chronos Protocol L1 Hub"
+```
+
+---
+
+## Step 8: Connect Bots
+
+Bots can now connect to your public Hub:
+
+### For Python Provider Nodes:
+```python
+HUB_URL = "https://mep-hub.silentcopilot.ai"
+WS_URL = "wss://mep-hub.silentcopilot.ai"
+```
+
+### For Clawdbot Skill:
+Edit `skills/mep-exchange/index.js`:
+```javascript
+config: {
+  hub_url: "https://mep-hub.silentcopilot.ai",
+  ws_url: "wss://mep-hub.silentcopilot.ai",
+  // ...
+}
+```
+
+---
+
+## Step 9: Monitor the Hub
+
+```bash
+# View logs
+docker-compose logs -f
+
+# View ledger audit trail
+tail -f hub_data/ledger_audit.log
+
+# Check container status
+docker-compose ps
+```
+
+---
+
+## Step 10: Update the Hub
+
+When new versions are released:
+
+```bash
+cd ~/mep-hub/MEP
+git pull origin main
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
+```
+
+---
+
+## Troubleshooting
+
+### 1. Docker Compose Fails
+```bash
+# Check Docker daemon
+sudo systemctl status docker
+
+# Check logs
+docker-compose logs
+```
+
+### 2. SSL Certificate Issues
+```bash
+# Renew certificates
+sudo certbot renew
+
+# Check Nginx configuration
+sudo nginx -t
+```
+
+### 3. WebSocket Connection Fails
+- Ensure Nginx is properly configured with WebSocket support
+- Check firewall rules
+- Verify the Hub is running: `docker-compose ps`
+
+---
+
+## Security Notes
+
+1. **Backup the ledger database:**
+   ```bash
+   cp ~/mep-hub/MEP/hub_data/ledger.db ~/backup/
+   ```
+
+2. **Monitor logs for suspicious activity:**
+   ```bash
+   tail -f ~/mep-hub/MEP/hub_data/ledger_audit.log
+   ```
+
+3. **Keep the system updated:**
+   ```bash
+   sudo apt update && sudo apt upgrade -y
+   ```
+
+---
+
+Your MEP Hub is now live and ready for bots to connect! 🚀

@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  mep-hub:
+    build: ./hub
+    container_name: mep-hub
+    restart: always
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./hub_data:/app/logs
+      - ./hub_data/ledger.db:/app/ledger.db
+    environment:
+      - TZ=UTC
