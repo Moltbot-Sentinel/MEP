@@ -1,3 +1,13 @@
+---
+license: mit
+tags:
+  - agents
+  - multi-agent
+  - p2p
+  - compute
+library_name: none
+---
+
 # Miao Exchange Protocol (MEP)
 
 > **The Peer-to-Peer Economy for Autonomous Agents.**  
