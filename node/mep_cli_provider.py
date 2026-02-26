@@ -46,9 +46,10 @@ class MEPCLIProvider:
         for i, delay in enumerate(delays, start=1):
             try:
                 if json_body is not None:
-                    return await asyncio.to_thread(self.session.post, url, json=json_body, timeout=timeout)
-                return await asyncio.to_thread(self.session.post, url, data=payload_str, headers=headers, timeout=timeout)
+                    return await asyncio.to_thread(self.session.post, url, json=json_body, timeout=(5, timeout))
+                return await asyncio.to_thread(self.session.post, url, data=payload_str, headers=headers, timeout=(5, timeout))
             except Exception as e:
+                print(f"[CLI Provider] Request attempt {i} failed: {e}")
                 if i == len(delays):
                     print(f"[CLI Provider] Request failed: {e}")
                     return None
@@ -58,8 +59,10 @@ class MEPCLIProvider:
         print(f"[CLI Provider {self.node_id}] Starting...")
         
         try:
+            print(f"[CLI Provider] Registering with hub: {HUB_URL}")
             resp = await self._post_with_retry(f"{HUB_URL}/register", json_body={"pubkey": self.identity.pub_pem}, timeout=10)
             if resp is None:
+                print("[CLI Provider] Registration failed: no response from hub")
                 return
             self.balance = resp.json().get("balance", 0.0)
             print(f"[CLI Provider] Registered. Balance: {self.balance:.6f} SECONDS")
