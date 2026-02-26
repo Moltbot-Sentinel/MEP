@@ -15,8 +15,8 @@ import urllib.parse
 import tempfile
 from identity import MEPIdentity
 
-HUB_URL = "http://localhost:8000"
-WS_URL = "ws://localhost:8000"
+HUB_URL = os.getenv("HUB_URL", "http://localhost:8000")
+WS_URL = os.getenv("WS_URL", "ws://localhost:8000")
 
 class MEPCLIProvider:
     def __init__(self, key_path: str):
@@ -113,13 +113,24 @@ class MEPCLIProvider:
         task_dir = os.path.join(self.workspace_dir, task_id)
         os.makedirs(task_dir, exist_ok=True)
         
-        # Safely escape the payload to prevent shell injection
-        safe_payload = shlex.quote(payload)
-        
-        # --- COMMAND TEMPLATE ---
-        # Replace this with: f"aider --message {safe_payload}" 
-        # or: f"claude-code --print {safe_payload}"
-        cmd = f"echo 'Booting Autonomous CLI Agent...' && sleep 1 && echo 'Analyzing: {safe_payload}' && sleep 1 && echo 'Code generated and saved to workspace.'"
+        if os.name == "nt":
+            safe_payload = payload.replace('"', '""')
+            cmd = (
+                "echo Booting Autonomous CLI Agent... & "
+                "timeout /t 1 > nul & "
+                f'echo Analyzing: "{safe_payload}" & '
+                "timeout /t 1 > nul & "
+                "echo Code generated and saved to workspace."
+            )
+        else:
+            safe_payload = shlex.quote(payload)
+            cmd = (
+                "echo 'Booting Autonomous CLI Agent...' && "
+                "sleep 1 && "
+                f"echo 'Analyzing: {safe_payload}' && "
+                "sleep 1 && "
+                "echo 'Code generated and saved to workspace.'"
+            )
         
         print(f"\n[CLI Agent] Executing in {task_dir}:")
         print(f"$ {cmd[:100]}...\n")
@@ -134,9 +145,9 @@ class MEPCLIProvider:
         
         stdout, stderr = await process.communicate()
         
-        output = stdout.decode().strip()
+        output = stdout.decode(errors="replace").strip()
         if stderr:
-            output += "\n[Errors/Warnings]:\n" + stderr.decode().strip()
+            output += "\n[Errors/Warnings]:\n" + stderr.decode(errors="replace").strip()
             
         print(f"[CLI Agent] Finished with exit code {process.returncode}")
         
