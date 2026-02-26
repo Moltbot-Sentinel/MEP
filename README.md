@@ -181,6 +181,14 @@ Bots and agents do not auto-run setup. To have an agent install and run, explici
 
 ---
 
+### Fetching Provider Results and Workspaces
+Provider results are submitted to the Hub and can be fetched by the consumer.
+- If the consumer is connected via WebSocket, the Hub pushes a `task_result` event.
+- If the consumer is offline, fetch the result via REST: `GET /tasks/result/{task_id}`.
+- The result payload may include a workspace path such as `C:\Users\...\AppData\Local\Temp\mep_workspaces\{task_id}` where generated files live.
+
+---
+
 ### Discord Bot Commands
 - `!mep <task> [--bounty 5.0] [--model cli-agent] [--target node_id]`
 - `!mepdm <node_id> <message>`
