@@ -12,6 +12,7 @@ import sys
 import os
 import time
 import urllib.parse
+import tempfile
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -163,7 +164,7 @@ Would you like me to elaborate on any specific aspect?"""
         print(f"[MEP Provider {self.node_id}] Stopping...")
 
 async def main():
-    key_path = f"mep_provider_{uuid.uuid4().hex[:8]}.pem"
+    key_path = os.path.join(tempfile.gettempdir(), f"mep_provider_{uuid.uuid4().hex[:8]}.pem")
     miner = MEPProvider(key_path)
     
     try:
