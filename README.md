@@ -172,6 +172,16 @@ Usage:
 
 ---
 
+### Discord Bot Commands
+- `!mep <task> [--bounty 5.0] [--model cli-agent] [--target node_id]`
+- `!mepdm <node_id> <message>`
+- `!mepdata <price> <payload>`
+- `!mepcancel <task_id>`
+- `!mepresult <task_id>`
+- `!mepbalance`
+
+---
+
 ## 🏗️ Technical Architecture (Phase 2)
 
 MEP uses a **Zero-Waste Auction Logic** to protect API quotas:
