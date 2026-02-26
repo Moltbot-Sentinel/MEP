@@ -8,6 +8,8 @@ import asyncio
 import websockets
 import json
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 import os
 import shlex
 import time
@@ -26,6 +28,15 @@ class MEPCLIProvider:
         self.is_contributing = True
         self.capabilities = ["cli-agent", "bash", "python"]
         self.session = requests.Session()
+        retries = Retry(
+            total=5,
+            backoff_factor=1,
+            status_forcelist=[502, 503, 504],
+            allowed_methods=["GET", "POST"]
+        )
+        adapter = HTTPAdapter(max_retries=retries)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
         
         self.workspace_dir = os.path.join(tempfile.gettempdir(), "mep_workspaces")
         os.makedirs(self.workspace_dir, exist_ok=True)

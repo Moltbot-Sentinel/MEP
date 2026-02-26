@@ -7,6 +7,8 @@ import asyncio
 import json
 import websockets
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 import sys
 import os
 import time
@@ -25,6 +27,16 @@ class MEPProvider:
         self.node_id = self.identity.node_id
         self.balance = 0.0
         self.is_mining = True
+        self.session = requests.Session()
+        retries = Retry(
+            total=5,
+            backoff_factor=1,
+            status_forcelist=[502, 503, 504],
+            allowed_methods=["GET", "POST"]
+        )
+        adapter = HTTPAdapter(max_retries=retries)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
         
     async def connect(self):
         """Connect to MEP Hub and start mining."""
@@ -32,7 +44,7 @@ class MEPProvider:
         
         # Register with hub
         try:
-            resp = requests.post(f"{HUB_URL}/register", json={"pubkey": self.identity.pub_pem})
+            resp = self.session.post(f"{HUB_URL}/register", json={"pubkey": self.identity.pub_pem}, timeout=10)
             data = resp.json()
             self.balance = data.get("balance", 0.0)
             print(f"[MEP Provider {self.node_id}] Registered. Balance: {self.balance:.6f} SECONDS")
@@ -89,7 +101,7 @@ class MEPProvider:
             })
             headers = self.identity.get_auth_headers(payload_str)
             headers["Content-Type"] = "application/json"
-            resp = requests.post(f"{HUB_URL}/tasks/bid", data=payload_str, headers=headers)
+            resp = self.session.post(f"{HUB_URL}/tasks/bid", data=payload_str, headers=headers, timeout=20)
             
             if resp.status_code == 200:
                 data = resp.json()
@@ -143,7 +155,7 @@ Would you like me to elaborate on any specific aspect?"""
             })
             headers = self.identity.get_auth_headers(payload_str)
             headers["Content-Type"] = "application/json"
-            resp = requests.post(f"{HUB_URL}/tasks/complete", data=payload_str, headers=headers)
+            resp = self.session.post(f"{HUB_URL}/tasks/complete", data=payload_str, headers=headers, timeout=20)
             
             if resp.status_code == 200:
                 data = resp.json()
