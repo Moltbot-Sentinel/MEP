@@ -7,7 +7,7 @@ import db
 import auth
 from logger import log_event, log_audit
 
-from models import NodeRegistration, TaskCreate, TaskResult, TaskBid
+from models import NodeRegistration, TaskCreate, TaskResult, TaskBid, TaskCancel
 
 app = FastAPI(title="Chronos Protocol L1 Hub", description="The Time Exchange Clearinghouse", version="0.1.2")
 
@@ -200,6 +200,55 @@ async def submit_task(
         db.set_idempotency(authenticated_node, "/tasks/submit", x_mep_idempotency_key, response_payload, 200, time.time())
     return response_payload
 
+@app.post("/tasks/cancel")
+async def cancel_task(
+    cancel: TaskCancel,
+    authenticated_node: str = Depends(verify_request),
+    x_mep_idempotency_key: Optional[str] = Header(default=None)
+):
+    if x_mep_idempotency_key:
+        existing = db.get_idempotency(authenticated_node, "/tasks/cancel", x_mep_idempotency_key)
+        if existing:
+            return existing["response"]
+
+    task = active_tasks.get(cancel.task_id)
+    if not task:
+        db_task = db.get_task(cancel.task_id)
+        if not db_task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        task = {
+            "id": db_task["task_id"],
+            "consumer_id": db_task["consumer_id"],
+            "payload": db_task["payload"],
+            "bounty": db_task["bounty"],
+            "status": db_task["status"],
+            "target_node": db_task["target_node"],
+            "model_requirement": db_task["model_requirement"],
+            "provider_id": db_task["provider_id"]
+        }
+
+    if authenticated_node != task["consumer_id"]:
+        raise HTTPException(status_code=403, detail="Cannot cancel tasks on behalf of another node")
+
+    now = time.time()
+    if not db.cancel_task_if_open(cancel.task_id, now):
+        raise HTTPException(status_code=400, detail="Task cannot be cancelled at this stage")
+
+    if task["bounty"] > 0:
+        db.add_balance(task["consumer_id"], task["bounty"])
+        new_balance = db.get_balance(task["consumer_id"])
+        log_audit("REFUND", task["consumer_id"], task["bounty"], new_balance, cancel.task_id)
+
+    if cancel.task_id in active_tasks:
+        del active_tasks[cancel.task_id]
+
+    log_event("task_cancelled", f"Task {cancel.task_id[:8]} cancelled by {task['consumer_id']}", consumer_id=task["consumer_id"], task_id=cancel.task_id, bounty=task["bounty"])
+
+    response_payload = {"status": "success", "task_id": cancel.task_id, "state": "cancelled"}
+    if x_mep_idempotency_key:
+        db.set_idempotency(authenticated_node, "/tasks/cancel", x_mep_idempotency_key, response_payload, 200, time.time())
+    return response_payload
+
 @app.post("/tasks/bid")
 async def place_bid(bid: TaskBid, authenticated_node: str = Depends(verify_request)):
     if authenticated_node != bid.provider_id:
@@ -212,10 +261,11 @@ async def place_bid(bid: TaskBid, authenticated_node: str = Depends(verify_reque
     if task["status"] != "bidding":
         return {"status": "rejected", "detail": "Task already assigned to another node"}
 
-    # Phase 2 Fast Auction: Accept the first valid bid
+    if not db.assign_task_if_open(bid.task_id, bid.provider_id, time.time()):
+        return {"status": "rejected", "detail": "Task already assigned to another node"}
+
     task["status"] = "assigned"
     task["provider_id"] = bid.provider_id
-    db.update_task_assignment(bid.task_id, bid.provider_id, "assigned", time.time())
 
     log_event("bid_accepted", f"Task {bid.task_id[:8]} assigned to {bid.provider_id}", task_id=bid.task_id, provider_id=bid.provider_id, bounty=task["bounty"])
 

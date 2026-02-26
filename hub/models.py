@@ -21,6 +21,9 @@ class TaskResult(BaseModel):
     provider_id: str
     result_payload: str
 
+class TaskCancel(BaseModel):
+    task_id: str
+
 class NodeBalance(BaseModel):
     node_id: str
     balance_seconds: float

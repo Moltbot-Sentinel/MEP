@@ -218,6 +218,58 @@ def update_task_result(task_id: str, provider_id: str, result_payload: str, stat
     conn.commit()
     _release_conn(conn)
 
+def update_task_status(task_id: str, status: str, updated_at: float):
+    conn = _get_conn()
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute(
+            "UPDATE tasks SET status = %s, provider_id = NULL, updated_at = %s WHERE task_id = %s",
+            (status, updated_at, task_id)
+        )
+    else:
+        cursor.execute(
+            "UPDATE tasks SET status = ?, provider_id = NULL, updated_at = ? WHERE task_id = ?",
+            (status, updated_at, task_id)
+        )
+    conn.commit()
+    _release_conn(conn)
+
+def assign_task_if_open(task_id: str, provider_id: str, updated_at: float) -> bool:
+    conn = _get_conn()
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute(
+            "UPDATE tasks SET provider_id = %s, status = 'assigned', updated_at = %s WHERE task_id = %s AND status = 'bidding' AND provider_id IS NULL",
+            (provider_id, updated_at, task_id)
+        )
+    else:
+        cursor.execute(
+            "UPDATE tasks SET provider_id = ?, status = 'assigned', updated_at = ? WHERE task_id = ? AND status = 'bidding' AND provider_id IS NULL",
+            (provider_id, updated_at, task_id)
+        )
+    updated = cursor.rowcount
+    conn.commit()
+    _release_conn(conn)
+    return updated > 0
+
+def cancel_task_if_open(task_id: str, updated_at: float) -> bool:
+    conn = _get_conn()
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute(
+            "UPDATE tasks SET status = 'cancelled', provider_id = NULL, updated_at = %s WHERE task_id = %s AND status = 'bidding' AND provider_id IS NULL",
+            (updated_at, task_id)
+        )
+    else:
+        cursor.execute(
+            "UPDATE tasks SET status = 'cancelled', provider_id = NULL, updated_at = ? WHERE task_id = ? AND status = 'bidding' AND provider_id IS NULL",
+            (updated_at, task_id)
+        )
+    updated = cursor.rowcount
+    conn.commit()
+    _release_conn(conn)
+    return updated > 0
+
 def get_task(task_id: str) -> Optional[dict]:
     conn = _get_conn()
     if not _is_postgres():
