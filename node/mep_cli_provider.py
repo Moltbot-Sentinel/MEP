@@ -141,6 +141,7 @@ class MEPCLIProvider:
         try:
             task_dir = os.path.join(self.workspace_dir, task_id)
             os.makedirs(task_dir, exist_ok=True)
+            print(f"[CLI Provider] Upload code enabled: {self.upload_code}")
             
             if os.name == "nt":
                 safe_payload = payload.replace('"', '""')
@@ -192,11 +193,17 @@ class MEPCLIProvider:
             print(f"[CLI Agent] Finished with exit code {process.returncode}")
             code_block = ""
             if self.upload_code:
-                candidates = [
+                py_candidates = [
                     os.path.join(task_dir, name)
                     for name in os.listdir(task_dir)
                     if name.lower().endswith(".py")
                 ]
+                file_candidates = [
+                    os.path.join(task_dir, name)
+                    for name in os.listdir(task_dir)
+                    if os.path.isfile(os.path.join(task_dir, name))
+                ]
+                candidates = py_candidates or file_candidates
                 if candidates:
                     script_path = max(candidates, key=lambda p: os.path.getmtime(p))
                     try:
@@ -204,9 +211,11 @@ class MEPCLIProvider:
                             code_text = f.read()
                         if len(code_text) > self.max_code_chars:
                             code_text = code_text[: self.max_code_chars] + "\n...truncated..."
-                        code_block = f"\n\n```python\n{code_text}\n```"
+                        code_block = f"\n\n```text\n{code_text}\n```"
                     except Exception as e:
                         code_block = f"\n\n[Code upload failed: {e}]"
+                else:
+                    code_block = "\n\n[No files found to upload]"
             result_payload = f"```bash\n{output}\n```\n*Workspace: {task_dir}*{code_block}"
             
             payload_str = json.dumps({
