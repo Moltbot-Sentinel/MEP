@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives import serialization
 class MEPIdentity:
     def __init__(self, key_path="private.pem"):
         self.key_path = key_path
+        self.generated_new_key = False
         self._load_or_generate()
         
     def _load_or_generate(self):
@@ -15,6 +16,7 @@ class MEPIdentity:
             with open(self.key_path, "rb") as f:
                 self.private_key = serialization.load_pem_private_key(f.read(), password=None)
         else:
+            self.generated_new_key = True
             self.private_key = ed25519.Ed25519PrivateKey.generate()
             with open(self.key_path, "wb") as f:
                 f.write(self.private_key.private_bytes(

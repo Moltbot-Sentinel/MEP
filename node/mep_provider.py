@@ -178,6 +178,9 @@ async def main():
     os.makedirs(key_dir, exist_ok=True)
     key_path = os.getenv("MEP_PROVIDER_KEY_PATH", os.path.join(key_dir, "mep_provider.pem"))
     miner = MEPProvider(key_path)
+    print(f"[MEP Provider] Key path: {miner.identity.key_path}")
+    if miner.identity.generated_new_key:
+        print("[MEP Provider] Generated new key, node id will change")
     
     try:
         await miner.connect()

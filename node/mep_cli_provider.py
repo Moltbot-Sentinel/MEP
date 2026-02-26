@@ -201,6 +201,9 @@ if __name__ == "__main__":
     os.makedirs(key_dir, exist_ok=True)
     key_path = os.getenv("MEP_CLI_KEY_PATH", os.path.join(key_dir, "mep_cli_provider.pem"))
     provider = MEPCLIProvider(key_path)
+    print(f"[CLI Provider] Key path: {provider.identity.key_path}")
+    if provider.identity.generated_new_key:
+        print("[CLI Provider] Generated new key, node id will change")
     
     try:
         asyncio.run(provider.connect())
