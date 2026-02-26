@@ -161,7 +161,7 @@ if __name__ == "__main__":
     print("WARNING: This node executes shell commands. Use sandboxing!")
     print("=" * 60)
     
-    key_path = f"cli_provider_{uuid.uuid4().hex[:6]}.pem"
+    key_path = os.path.join(tempfile.gettempdir(), f"cli_provider_{uuid.uuid4().hex[:6]}.pem")
     provider = MEPCLIProvider(key_path)
     
     try:
