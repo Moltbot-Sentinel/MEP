@@ -42,6 +42,8 @@ class MEPCLIProvider:
         os.makedirs(self.workspace_dir, exist_ok=True)
         self.upload_code = os.getenv("MEP_CLI_UPLOAD_CODE", "false").lower() in ("1", "true", "yes")
         self.max_code_chars = int(os.getenv("MEP_CLI_MAX_CODE_CHARS", "12000"))
+        # Safety: maximum SECONDS a node will spend to buy data (negative bounty)
+        self.max_purchase_price = float(os.getenv("MEP_MAX_PURCHASE_PRICE", "0.0"))
 
     async def _post_with_retry(self, url: str, payload_str: str | None = None, json_body: dict | None = None, headers: dict | None = None, timeout: int = 20):
         delays = [1, 2, 4, 8]
@@ -105,7 +107,18 @@ class MEPCLIProvider:
         
         if model not in self.capabilities and model is not None:
             return
-            
+        
+        # 🛡️ CRITICAL SAFETY CHECK: DO NOT BUY DATA UNLESS EXPLICITLY ENABLED
+        if bounty < 0:
+            cost = abs(bounty)
+            if cost > self.max_purchase_price:
+                print(f"[CLI Provider] 🚨 REJECTED DATA MARKET TASK {task_id[:8]}: "
+                      f"Price {cost:.6f} SECONDS exceeds max_purchase_price {self.max_purchase_price:.6f}")
+                return
+            else:
+                print(f"[CLI Provider] ✅ Accepting data purchase {task_id[:8]} for {cost:.6f} SECONDS "
+                      f"(max allowed: {self.max_purchase_price:.6f})")
+        
         print(f"[CLI Provider] Received matching RFC {task_id[:8]} for {bounty:.6f} SECONDS. Bidding...")
         
         try:
