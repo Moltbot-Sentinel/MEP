@@ -43,6 +43,19 @@ def _row_to_dict(cursor, row):
     columns = [desc[0] for desc in cursor.description]
     return dict(zip(columns, row))
 
+def _ensure_registry_availability_column(cursor):
+    if _is_postgres():
+        cursor.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'agent_registry' AND column_name = 'availability'"
+        )
+        if not cursor.fetchone():
+            cursor.execute("ALTER TABLE agent_registry ADD COLUMN availability TEXT NOT NULL DEFAULT 'unknown'")
+    else:
+        cursor.execute("PRAGMA table_info(agent_registry)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "availability" not in columns:
+            cursor.execute("ALTER TABLE agent_registry ADD COLUMN availability TEXT NOT NULL DEFAULT 'unknown'")
+
 def init_db():
     conn = _get_conn()
     cursor = conn.cursor()
@@ -77,6 +90,59 @@ def init_db():
             status_code INTEGER NOT NULL,
             created_at REAL NOT NULL,
             PRIMARY KEY (node_id, endpoint, idem_key)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS agent_registry (
+            node_id TEXT PRIMARY KEY,
+            alias TEXT,
+            skills TEXT NOT NULL,
+            models TEXT NOT NULL,
+            metadata TEXT NOT NULL,
+            availability TEXT NOT NULL DEFAULT 'unknown',
+            updated_at REAL NOT NULL
+        )
+    ''')
+    _ensure_registry_availability_column(cursor)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS reputation (
+            node_id TEXT PRIMARY KEY,
+            score REAL NOT NULL,
+            total_reviews INTEGER NOT NULL,
+            updated_at REAL NOT NULL
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS task_reviews (
+            task_id TEXT PRIMARY KEY,
+            consumer_id TEXT NOT NULL,
+            provider_id TEXT NOT NULL,
+            rating INTEGER NOT NULL,
+            created_at REAL NOT NULL
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS escrows (
+            task_id TEXT PRIMARY KEY,
+            consumer_id TEXT NOT NULL,
+            provider_id TEXT,
+            amount REAL NOT NULL,
+            status TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS disputes (
+            dispute_id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            consumer_id TEXT NOT NULL,
+            provider_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            resolution TEXT,
+            created_at REAL NOT NULL,
+            resolved_at REAL
         )
     ''')
     conn.commit()
@@ -320,6 +386,59 @@ def get_active_tasks() -> list:
     _release_conn(conn)
     return result
 
+def get_assigned_tasks_before(cutoff_ts: float) -> list:
+    conn = _get_conn()
+    if not _is_postgres():
+        conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute("SELECT * FROM tasks WHERE status = 'assigned' AND updated_at < %s", (cutoff_ts,))
+    else:
+        cursor.execute("SELECT * FROM tasks WHERE status = 'assigned' AND updated_at < ?", (cutoff_ts,))
+    rows = cursor.fetchall()
+    if _is_postgres():
+        result = [_row_to_dict(cursor, row) for row in rows]
+    else:
+        result = [dict(row) for row in rows]
+    _release_conn(conn)
+    return result
+
+def expire_task_if_assigned(task_id: str, updated_at: float) -> bool:
+    conn = _get_conn()
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute(
+            "UPDATE tasks SET status = 'expired', provider_id = NULL, updated_at = %s WHERE task_id = %s AND status = 'assigned'",
+            (updated_at, task_id)
+        )
+    else:
+        cursor.execute(
+            "UPDATE tasks SET status = 'expired', provider_id = NULL, updated_at = ? WHERE task_id = ? AND status = 'assigned'",
+            (updated_at, task_id)
+        )
+    updated = cursor.rowcount
+    conn.commit()
+    _release_conn(conn)
+    return updated > 0
+
+def requeue_task_if_assigned(task_id: str, updated_at: float) -> bool:
+    conn = _get_conn()
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute(
+            "UPDATE tasks SET status = 'bidding', provider_id = NULL, updated_at = %s WHERE task_id = %s AND status = 'assigned'",
+            (updated_at, task_id)
+        )
+    else:
+        cursor.execute(
+            "UPDATE tasks SET status = 'bidding', provider_id = NULL, updated_at = ? WHERE task_id = ? AND status = 'assigned'",
+            (updated_at, task_id)
+        )
+    updated = cursor.rowcount
+    conn.commit()
+    _release_conn(conn)
+    return updated > 0
+
 def get_last_completed_task_time() -> Optional[float]:
     conn = _get_conn()
     cursor = conn.cursor()
@@ -369,5 +488,370 @@ def set_idempotency(node_id: str, endpoint: str, idem_key: str, response: dict, 
         )
     conn.commit()
     _release_conn(conn)
+
+def upsert_registry(node_id: str, alias: Optional[str], skills: list[str], models: list[str], metadata: dict, availability: str, updated_at: float):
+    conn = _get_conn()
+    cursor = conn.cursor()
+    skills_payload = json.dumps(skills)
+    models_payload = json.dumps(models)
+    metadata_payload = json.dumps(metadata)
+    if _is_postgres():
+        cursor.execute(
+            "INSERT INTO agent_registry (node_id, alias, skills, models, metadata, availability, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (node_id) DO UPDATE SET alias = EXCLUDED.alias, skills = EXCLUDED.skills, models = EXCLUDED.models, metadata = EXCLUDED.metadata, availability = EXCLUDED.availability, updated_at = EXCLUDED.updated_at",
+            (node_id, alias, skills_payload, models_payload, metadata_payload, availability, updated_at)
+        )
+    else:
+        cursor.execute(
+            "INSERT INTO agent_registry (node_id, alias, skills, models, metadata, availability, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(node_id) DO UPDATE SET alias=excluded.alias, skills=excluded.skills, models=excluded.models, metadata=excluded.metadata, availability=excluded.availability, updated_at=excluded.updated_at",
+            (node_id, alias, skills_payload, models_payload, metadata_payload, availability, updated_at)
+        )
+    conn.commit()
+    _release_conn(conn)
+
+def update_registry_availability(node_id: str, availability: str, updated_at: float):
+    conn = _get_conn()
+    cursor = conn.cursor()
+    skills_payload = json.dumps([])
+    models_payload = json.dumps([])
+    metadata_payload = json.dumps({})
+    if _is_postgres():
+        cursor.execute(
+            "INSERT INTO agent_registry (node_id, alias, skills, models, metadata, availability, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (node_id) DO UPDATE SET availability = EXCLUDED.availability, updated_at = EXCLUDED.updated_at",
+            (node_id, None, skills_payload, models_payload, metadata_payload, availability, updated_at)
+        )
+    else:
+        cursor.execute(
+            "INSERT INTO agent_registry (node_id, alias, skills, models, metadata, availability, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(node_id) DO UPDATE SET availability=excluded.availability, updated_at=excluded.updated_at",
+            (node_id, None, skills_payload, models_payload, metadata_payload, availability, updated_at)
+        )
+    conn.commit()
+    _release_conn(conn)
+
+def get_registry(node_id: str) -> Optional[dict]:
+    conn = _get_conn()
+    if not _is_postgres():
+        conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute("SELECT * FROM agent_registry WHERE node_id = %s", (node_id,))
+    else:
+        cursor.execute("SELECT * FROM agent_registry WHERE node_id = ?", (node_id,))
+    row = cursor.fetchone()
+    if not row:
+        _release_conn(conn)
+        return None
+    if _is_postgres():
+        result = _row_to_dict(cursor, row)
+    else:
+        result = dict(row)
+    _release_conn(conn)
+    result["skills"] = json.loads(result["skills"]) if result.get("skills") else []
+    result["models"] = json.loads(result["models"]) if result.get("models") else []
+    result["metadata"] = json.loads(result["metadata"]) if result.get("metadata") else {}
+    return result
+
+def search_registry(alias: Optional[str], skill: Optional[str], model: Optional[str], availability: Optional[str], min_score: Optional[float], min_reviews: Optional[int], min_updated_at: Optional[float], limit: int) -> list[dict]:
+    conn = _get_conn()
+    if not _is_postgres():
+        conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    conditions = []
+    params: list = []
+    if min_score is not None:
+        conditions.append("COALESCE(reputation.score, 0) >= %s" if _is_postgres() else "COALESCE(reputation.score, 0) >= ?")
+        params.append(min_score)
+    if min_reviews is not None:
+        conditions.append("COALESCE(reputation.total_reviews, 0) >= %s" if _is_postgres() else "COALESCE(reputation.total_reviews, 0) >= ?")
+        params.append(min_reviews)
+    if availability:
+        conditions.append("agent_registry.availability = %s" if _is_postgres() else "agent_registry.availability = ?")
+        params.append(availability)
+    if min_updated_at is not None:
+        conditions.append("agent_registry.updated_at >= %s" if _is_postgres() else "agent_registry.updated_at >= ?")
+        params.append(min_updated_at)
+    if alias:
+        if _is_postgres():
+            conditions.append("agent_registry.alias ILIKE %s")
+            params.append(f"%{alias}%")
+        else:
+            conditions.append("agent_registry.alias LIKE ?")
+            params.append(f"%{alias}%")
+    if skill:
+        if _is_postgres():
+            conditions.append("skills ILIKE %s")
+            params.append(f"%{skill.lower()}%")
+        else:
+            conditions.append("skills LIKE ?")
+            params.append(f"%{skill.lower()}%")
+    if model:
+        if _is_postgres():
+            conditions.append("models ILIKE %s")
+            params.append(f"%{model.lower()}%")
+        else:
+            conditions.append("models LIKE ?")
+            params.append(f"%{model.lower()}%")
+    where_clause = " AND ".join(conditions)
+    query = "SELECT agent_registry.* FROM agent_registry LEFT JOIN reputation ON reputation.node_id = agent_registry.node_id"
+    if where_clause:
+        query += f" WHERE {where_clause}"
+    query += " ORDER BY updated_at DESC LIMIT %s" if _is_postgres() else " ORDER BY updated_at DESC LIMIT ?"
+    params.append(limit)
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    if _is_postgres():
+        result = [_row_to_dict(cursor, row) for row in rows]
+    else:
+        result = [dict(row) for row in rows]
+    _release_conn(conn)
+    for item in result:
+        item["skills"] = json.loads(item["skills"]) if item.get("skills") else []
+        item["models"] = json.loads(item["models"]) if item.get("models") else []
+        item["metadata"] = json.loads(item["metadata"]) if item.get("metadata") else {}
+    return result
+
+def get_reputation(node_id: str) -> Optional[dict]:
+    conn = _get_conn()
+    if not _is_postgres():
+        conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute("SELECT * FROM reputation WHERE node_id = %s", (node_id,))
+    else:
+        cursor.execute("SELECT * FROM reputation WHERE node_id = ?", (node_id,))
+    row = cursor.fetchone()
+    if not row:
+        _release_conn(conn)
+        return None
+    if _is_postgres():
+        result = _row_to_dict(cursor, row)
+    else:
+        result = dict(row)
+    _release_conn(conn)
+    return result
+
+def submit_review(task_id: str, consumer_id: str, provider_id: str, rating: int, created_at: float) -> dict:
+    conn = _get_conn()
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute("SELECT task_id FROM task_reviews WHERE task_id = %s", (task_id,))
+    else:
+        cursor.execute("SELECT task_id FROM task_reviews WHERE task_id = ?", (task_id,))
+    if cursor.fetchone():
+        _release_conn(conn)
+        return {"status": "exists"}
+
+    if _is_postgres():
+        cursor.execute(
+            "INSERT INTO task_reviews (task_id, consumer_id, provider_id, rating, created_at) VALUES (%s, %s, %s, %s, %s)",
+            (task_id, consumer_id, provider_id, rating, created_at)
+        )
+        cursor.execute("SELECT score, total_reviews FROM reputation WHERE node_id = %s", (provider_id,))
+    else:
+        cursor.execute(
+            "INSERT INTO task_reviews (task_id, consumer_id, provider_id, rating, created_at) VALUES (?, ?, ?, ?, ?)",
+            (task_id, consumer_id, provider_id, rating, created_at)
+        )
+        cursor.execute("SELECT score, total_reviews FROM reputation WHERE node_id = ?", (provider_id,))
+    row = cursor.fetchone()
+    if row:
+        current_score = float(row[0])
+        total_reviews = int(row[1])
+    else:
+        current_score = 0.0
+        total_reviews = 0
+    new_total = total_reviews + 1
+    new_score = (current_score * total_reviews + rating) / new_total
+    if _is_postgres():
+        cursor.execute(
+            "INSERT INTO reputation (node_id, score, total_reviews, updated_at) VALUES (%s, %s, %s, %s) ON CONFLICT (node_id) DO UPDATE SET score = EXCLUDED.score, total_reviews = EXCLUDED.total_reviews, updated_at = EXCLUDED.updated_at",
+            (provider_id, new_score, new_total, created_at)
+        )
+    else:
+        cursor.execute(
+            "INSERT INTO reputation (node_id, score, total_reviews, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(node_id) DO UPDATE SET score=excluded.score, total_reviews=excluded.total_reviews, updated_at=excluded.updated_at",
+            (provider_id, new_score, new_total, created_at)
+        )
+    conn.commit()
+    _release_conn(conn)
+    return {"status": "success", "score": new_score, "total_reviews": new_total}
+
+def create_escrow(task_id: str, consumer_id: str, amount: float, created_at: float):
+    conn = _get_conn()
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute(
+            "INSERT INTO escrows (task_id, consumer_id, provider_id, amount, status, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (task_id) DO NOTHING",
+            (task_id, consumer_id, None, amount, "held", created_at, created_at)
+        )
+    else:
+        cursor.execute(
+            "INSERT OR IGNORE INTO escrows (task_id, consumer_id, provider_id, amount, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (task_id, consumer_id, None, amount, "held", created_at, created_at)
+        )
+    conn.commit()
+    _release_conn(conn)
+
+def get_escrow(task_id: str) -> Optional[dict]:
+    conn = _get_conn()
+    if not _is_postgres():
+        conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute("SELECT * FROM escrows WHERE task_id = %s", (task_id,))
+    else:
+        cursor.execute("SELECT * FROM escrows WHERE task_id = ?", (task_id,))
+    row = cursor.fetchone()
+    if not row:
+        _release_conn(conn)
+        return None
+    if _is_postgres():
+        result = _row_to_dict(cursor, row)
+    else:
+        result = dict(row)
+    _release_conn(conn)
+    return result
+
+def release_escrow(task_id: str, provider_id: str, updated_at: float) -> Optional[float]:
+    conn = _get_conn()
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute("SELECT amount, status FROM escrows WHERE task_id = %s", (task_id,))
+    else:
+        cursor.execute("SELECT amount, status FROM escrows WHERE task_id = ?", (task_id,))
+    row = cursor.fetchone()
+    if not row or row[1] != "held":
+        _release_conn(conn)
+        return None
+    amount = float(row[0])
+    if _is_postgres():
+        cursor.execute(
+            "UPDATE escrows SET provider_id = %s, status = %s, updated_at = %s WHERE task_id = %s",
+            (provider_id, "released", updated_at, task_id)
+        )
+        cursor.execute("UPDATE ledger SET balance = balance + %s WHERE node_id = %s", (amount, provider_id))
+    else:
+        cursor.execute(
+            "UPDATE escrows SET provider_id = ?, status = ?, updated_at = ? WHERE task_id = ?",
+            (provider_id, "released", updated_at, task_id)
+        )
+        cursor.execute("UPDATE ledger SET balance = balance + ? WHERE node_id = ?", (amount, provider_id))
+    conn.commit()
+    _release_conn(conn)
+    return amount
+
+def refund_escrow(task_id: str, updated_at: float) -> Optional[float]:
+    conn = _get_conn()
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute("SELECT consumer_id, amount, status FROM escrows WHERE task_id = %s", (task_id,))
+    else:
+        cursor.execute("SELECT consumer_id, amount, status FROM escrows WHERE task_id = ?", (task_id,))
+    row = cursor.fetchone()
+    if not row or row[2] != "held":
+        _release_conn(conn)
+        return None
+    consumer_id = row[0]
+    amount = float(row[1])
+    if _is_postgres():
+        cursor.execute(
+            "UPDATE escrows SET status = %s, updated_at = %s WHERE task_id = %s",
+            ("refunded", updated_at, task_id)
+        )
+        cursor.execute("UPDATE ledger SET balance = balance + %s WHERE node_id = %s", (amount, consumer_id))
+    else:
+        cursor.execute(
+            "UPDATE escrows SET status = ?, updated_at = ? WHERE task_id = ?",
+            ("refunded", updated_at, task_id)
+        )
+        cursor.execute("UPDATE ledger SET balance = balance + ? WHERE node_id = ?", (amount, consumer_id))
+    conn.commit()
+    _release_conn(conn)
+    return amount
+
+def chargeback_escrow(task_id: str, updated_at: float) -> dict:
+    conn = _get_conn()
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute("SELECT consumer_id, provider_id, amount, status FROM escrows WHERE task_id = %s", (task_id,))
+    else:
+        cursor.execute("SELECT consumer_id, provider_id, amount, status FROM escrows WHERE task_id = ?", (task_id,))
+    row = cursor.fetchone()
+    if not row or row[3] != "released":
+        _release_conn(conn)
+        return {"status": "invalid"}
+    consumer_id = row[0]
+    provider_id = row[1]
+    amount = float(row[2])
+    if _is_postgres():
+        cursor.execute(
+            "UPDATE ledger SET balance = balance - %s WHERE node_id = %s AND balance >= %s",
+            (amount, provider_id, amount)
+        )
+    else:
+        cursor.execute(
+            "UPDATE ledger SET balance = balance - ? WHERE node_id = ? AND balance >= ?",
+            (amount, provider_id, amount)
+        )
+    if cursor.rowcount == 0:
+        _release_conn(conn)
+        return {"status": "insufficient"}
+    if _is_postgres():
+        cursor.execute(
+            "UPDATE escrows SET status = %s, updated_at = %s WHERE task_id = %s",
+            ("chargeback", updated_at, task_id)
+        )
+        cursor.execute("UPDATE ledger SET balance = balance + %s WHERE node_id = %s", (amount, consumer_id))
+    else:
+        cursor.execute(
+            "UPDATE escrows SET status = ?, updated_at = ? WHERE task_id = ?",
+            ("chargeback", updated_at, task_id)
+        )
+        cursor.execute("UPDATE ledger SET balance = balance + ? WHERE node_id = ?", (amount, consumer_id))
+    conn.commit()
+    _release_conn(conn)
+    return {"status": "success", "amount": amount, "consumer_id": consumer_id, "provider_id": provider_id}
+
+def open_dispute(task_id: str, consumer_id: str, provider_id: str, reason: str, created_at: float) -> str:
+    dispute_id = f"dispute_{task_id}"
+    conn = _get_conn()
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute("SELECT dispute_id FROM disputes WHERE task_id = %s", (task_id,))
+    else:
+        cursor.execute("SELECT dispute_id FROM disputes WHERE task_id = ?", (task_id,))
+    if cursor.fetchone():
+        _release_conn(conn)
+        return "exists"
+    if _is_postgres():
+        cursor.execute(
+            "INSERT INTO disputes (dispute_id, task_id, consumer_id, provider_id, status, reason, resolution, created_at, resolved_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (dispute_id, task_id, consumer_id, provider_id, "open", reason, None, created_at, None)
+        )
+    else:
+        cursor.execute(
+            "INSERT INTO disputes (dispute_id, task_id, consumer_id, provider_id, status, reason, resolution, created_at, resolved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (dispute_id, task_id, consumer_id, provider_id, "open", reason, None, created_at, None)
+        )
+    conn.commit()
+    _release_conn(conn)
+    return dispute_id
+
+def resolve_dispute(task_id: str, resolution: str, resolved_at: float) -> bool:
+    conn = _get_conn()
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute(
+            "UPDATE disputes SET status = %s, resolution = %s, resolved_at = %s WHERE task_id = %s AND status = 'open'",
+            ("resolved", resolution, resolved_at, task_id)
+        )
+    else:
+        cursor.execute(
+            "UPDATE disputes SET status = ?, resolution = ?, resolved_at = ? WHERE task_id = ? AND status = 'open'",
+            ("resolved", resolution, resolved_at, task_id)
+        )
+    updated = cursor.rowcount
+    conn.commit()
+    _release_conn(conn)
+    return updated > 0
 
 init_db()
