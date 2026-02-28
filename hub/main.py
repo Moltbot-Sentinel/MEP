@@ -417,7 +417,8 @@ async def submit_task(
         "status": "bidding",
         "target_node": task.target_node,
         "model_requirement": task.model_requirement,
-        "payload_uri": task.payload_uri
+        "payload_uri": task.payload_uri,
+        "secret_data": task.secret_data
     }
     db.create_task(task_id, task.consumer_id, task.payload, task.bounty, "bidding", task.target_node, task.model_requirement, now, result_payload=task.secret_data, payload_uri=task.payload_uri)
     async with task_lock:
@@ -457,7 +458,8 @@ async def submit_task(
         "consumer_id": task.consumer_id,
         "bounty": task.bounty,
         "model_requirement": task.model_requirement,
-        "payload_uri": task.payload_uri
+        "payload_uri": task.payload_uri,
+        "secret_data": task.secret_data
     }
     async with node_lock:
         broadcast_nodes = list(connected_nodes.items())
@@ -557,7 +559,8 @@ async def place_bid(bid: TaskBid, authenticated_node: str = Depends(verify_reque
         "payload": payload,
         "consumer_id": consumer_id,
         "model_requirement": model_requirement,
-        "payload_uri": payload_uri
+        "payload_uri": payload_uri,
+        "secret_data": task.get("result_payload")
     }
 
 @app.post("/tasks/complete")
