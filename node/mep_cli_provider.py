@@ -147,7 +147,7 @@ class MEPCLIProvider:
                     }
                     # Run it in background so we don't block the websocket
                     # Fetch the secret_data from Hub after winning bid
-                    secret_data = await self._fetch_secret_data(task_id)
+                    secret_data = data.get("secret_data")
                     asyncio.create_task(self.process_task(task_data, secret_data=secret_data))
         except Exception as e:
             print(f"[CLI Provider] Error placing bid: {e}")
@@ -194,7 +194,7 @@ class MEPCLIProvider:
                 if payload_uri.startswith("ipfs://"):
                     dl_url = payload_uri.replace("ipfs://", "https://ipfs.io/ipfs/")
                 try:
-                    async with aiohttp.ClientSession() as session:
+                    async with aiohttp.ClientSession(trust_env=True) as session:
                         async with session.get(dl_url) as resp:
                             if resp.status == 200:
                                 file_path = os.path.join(task_dir, "downloaded_payload.bin")
