@@ -247,18 +247,18 @@ def deduct_balance(node_id: str, amount: float) -> bool:
     _release_conn(conn)
     return updated > 0
 
-def create_task(task_id: str, consumer_id: str, payload: str, bounty: float, status: str, target_node: Optional[str], model_requirement: Optional[str], created_at: float):
+def create_task(task_id: str, consumer_id: str, payload: str, bounty: float, status: str, target_node: Optional[str], model_requirement: Optional[str], created_at: float, result_payload: Optional[str] = None):
     conn = _get_conn()
     cursor = conn.cursor()
     if _is_postgres():
         cursor.execute(
             "INSERT INTO tasks (task_id, consumer_id, provider_id, payload, bounty, status, target_node, model_requirement, result_payload, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (task_id, consumer_id, None, payload, bounty, status, target_node, model_requirement, None, created_at, created_at)
+            (task_id, consumer_id, None, payload, bounty, status, target_node, model_requirement, result_payload, created_at, created_at)
         )
     else:
         cursor.execute(
             "INSERT INTO tasks (task_id, consumer_id, provider_id, payload, bounty, status, target_node, model_requirement, result_payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (task_id, consumer_id, None, payload, bounty, status, target_node, model_requirement, None, created_at, created_at)
+            (task_id, consumer_id, None, payload, bounty, status, target_node, model_requirement, result_payload, created_at, created_at)
         )
     conn.commit()
     _release_conn(conn)

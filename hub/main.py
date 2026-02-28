@@ -373,6 +373,9 @@ async def submit_task(
     if authenticated_node != task.consumer_id:
         raise HTTPException(status_code=403, detail="Cannot submit tasks on behalf of another node")
 
+    if task.bounty < 0 and not task.secret_data:
+        raise HTTPException(status_code=400, detail="Data market tasks (bounty < 0) require secret_data")
+
     if len(task.payload) > MAX_PAYLOAD_CHARS:
         raise HTTPException(status_code=413, detail="Task payload too large")
     
@@ -415,7 +418,7 @@ async def submit_task(
         "target_node": task.target_node,
         "model_requirement": task.model_requirement
     }
-    db.create_task(task_id, task.consumer_id, task.payload, task.bounty, "bidding", task.target_node, task.model_requirement, now)
+    db.create_task(task_id, task.consumer_id, task.payload, task.bounty, "bidding", task.target_node, task.model_requirement, now, result_payload=task.secret_data)
     async with task_lock:
         active_tasks[task_id] = task_data
 

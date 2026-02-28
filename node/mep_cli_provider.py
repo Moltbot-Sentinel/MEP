@@ -1,3 +1,4 @@
+from typing import Optional, Dict, Any
 #!/usr/bin/env python3
 """
 MEP CLI Provider
@@ -141,13 +142,37 @@ class MEPCLIProvider:
                         "consumer_id": data["consumer_id"]
                     }
                     # Run it in background so we don't block the websocket
-                    asyncio.create_task(self.process_task(task_data))
+                    # Fetch the secret_data from Hub after winning bid
+                    secret_data = await self._fetch_secret_data(task_id)
+                    asyncio.create_task(self.process_task(task_data, secret_data=secret_data))
         except Exception as e:
             print(f"[CLI Provider] Error placing bid: {e}")
 
-    async def process_task(self, task_data: dict):
+    async def _fetch_secret_data(self, task_id: str) -> Optional[str]:
+        """Fetch the secret_data from Hub for a Data Market purchase."""
+        try:
+            headers = self.identity.get_auth_headers("")
+            headers["Content-Type"] = "application/json"
+            resp = requests.get(f"{HUB_URL}/tasks/result/{task_id}", headers=headers, timeout=10)
+            if resp is not None and resp.status_code == 200:
+                data = resp.json()
+                return data.get("result_payload")
+        except Exception as e:
+            print(f"[CLI Provider] Failed to fetch secret data: {e}")
+        return None
+
+    async def process_task(self, task_data: dict, secret_data: Optional[str] = None):
         """Execute the task using a local CLI agent."""
         task_id = task_data["id"]
+        
+        # If this is a Data Market purchase, save the secret data!
+        if secret_data:
+            task_dir = os.path.join(self.workspace_dir, task_id)
+            os.makedirs(task_dir, exist_ok=True)
+            data_file = os.path.join(task_dir, "purchased_data.txt")
+            with open(data_file, "w", encoding="utf-8") as f:
+                f.write(secret_data)
+            print(f"[CLI Provider] 💾 Saved purchased data to {data_file}")
         payload = task_data["payload"]
         bounty = task_data["bounty"]
         

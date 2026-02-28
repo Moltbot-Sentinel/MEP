@@ -11,6 +11,7 @@ class TaskCreate(BaseModel):
     bounty: float
     target_node: Optional[str] = None  # Direct messaging / specific bot targeting
     model_requirement: Optional[str] = None
+    secret_data: Optional[str] = None
 
 class TaskBid(BaseModel):
     task_id: str
