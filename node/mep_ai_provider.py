@@ -4,6 +4,7 @@ MEP AI Provider - For AI agents like Hub Sentinel (Gemini 3.1 Pro).
 Based on mep_cli_provider.py but uses AI API instead of CLI.
 """
 import asyncio
+import base64
 import os
 import sys
 import json
@@ -105,6 +106,8 @@ class MEPAIProvider:
                 print(f"[AI Provider] Bid accepted! Task assigned.")
                 # Process task with secret_data if provided
                 secret_data = bid_data.get("secret_data")
+                consumer_pubkey_b64 = bid_data.get("consumer_x25519_pubkey")
+                # Pass both to process_task
                 await self.process_task(rfc_data, secret_data=secret_data)
             else:
                 print(f"[AI Provider] Bid failed: {resp.text}")
@@ -112,6 +115,39 @@ class MEPAIProvider:
             print(f"[AI Provider] Bid error: {e}")
     
     async def process_task(self, task_data: dict, secret_data: Optional[str] = None):
+        """Execute the task using AI API."""
+        task_id = task_data["id"]
+        payload = task_data["payload"]
+        payload_uri = task_data.get("payload_uri")
+        bounty = task_data["bounty"]
+        consumer_pubkey_b64 = task_data.get("consumer_x25519_pubkey")
+        
+        print(f"[AI Provider] Processing task {task_id[:8]} for {bounty:.6f} SECONDS")
+        
+        # Handle Data Market purchase with X25519 decryption
+        if secret_data:
+            print(f"[AI Provider] 💾 Received purchased data")
+            
+            # Try X25519 decryption if consumer pubkey is provided
+            if consumer_pubkey_b64:
+                try:
+                    consumer_pubkey = base64.b64decode(consumer_pubkey_b64)
+                    decrypted_secret = self.identity.decrypt_from_peer(consumer_pubkey, secret_data)
+                    print(f"[AI Provider] ✅ Decrypted secret data: {decrypted_secret[:50]}...")
+                    secret_data = decrypted_secret  # Replace with plaintext
+                except Exception as e:
+                    print(f"[AI Provider] ❌ X25519 decryption failed (assuming plaintext): {e}")
+            else:
+                print(f"[AI Provider] ℹ️ Secret data (plaintext): {secret_data[:50]}...")
+        
+        # Download payload from IPFS if provided
+        if payload_uri:
+            print(f"[AI Provider] 📥 Downloading from {payload_uri}...")
+            # TODO: Implement actual download
+            dl_url = payload_uri
+            if payload_uri.startswith("ipfs://"):
+                dl_url = payload_uri.replace("ipfs://", "https://ipfs.io/ipfs/")
+            print(f"[AI Provider]   Would download from: {dl_url}")
         """Execute the task using AI API."""
         task_id = task_data["id"]
         payload = task_data["payload"]
@@ -136,13 +172,15 @@ class MEPAIProvider:
         try:
             # Use configured AI command
             cmd = self.ai_api_cmd.split()
-            cmd.append(payload)
+            # SECURITY FIX (Thanks Hub Sentinel!): 
+            # Pass payload via stdin to avoid ps aux leaking and ARG_MAX limits
             
             result = subprocess.run(
                 cmd,
+                input=payload,
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=120  # Increased timeout for complex AI reasoning
             )
             
             if result.returncode == 0:
