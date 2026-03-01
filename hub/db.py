@@ -45,6 +45,16 @@ def _row_to_dict(cursor, row):
 
 def _ensure_registry_availability_column(cursor):
     if _is_postgres():
+        cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'agent_registry' AND column_name = 'x25519_public_key'")
+        if not cursor.fetchone():
+            cursor.execute("ALTER TABLE agent_registry ADD COLUMN x25519_public_key TEXT")
+    else:
+        cursor.execute("PRAGMA table_info(agent_registry)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "x25519_public_key" not in columns:
+            cursor.execute("ALTER TABLE agent_registry ADD COLUMN x25519_public_key TEXT")
+
+    if _is_postgres():
         cursor.execute(
             "SELECT column_name FROM information_schema.columns WHERE table_name = 'agent_registry' AND column_name = 'availability'"
         )
@@ -110,7 +120,8 @@ def init_db():
             models TEXT NOT NULL,
             metadata TEXT NOT NULL,
             availability TEXT NOT NULL DEFAULT 'unknown',
-            updated_at REAL NOT NULL
+            updated_at REAL NOT NULL,
+            x25519_public_key TEXT
         )
     ''')
     _ensure_registry_availability_column(cursor)
@@ -499,7 +510,7 @@ def set_idempotency(node_id: str, endpoint: str, idem_key: str, response: dict, 
     conn.commit()
     _release_conn(conn)
 
-def upsert_registry(node_id: str, alias: Optional[str], skills: list[str], models: list[str], metadata: dict, availability: str, updated_at: float):
+def upsert_registry(node_id: str, alias: Optional[str], skills: list[str], models: list[str], metadata: dict, availability: str, updated_at: float, x25519_public_key: str = None):
     conn = _get_conn()
     cursor = conn.cursor()
     skills_payload = json.dumps(skills)
@@ -507,13 +518,13 @@ def upsert_registry(node_id: str, alias: Optional[str], skills: list[str], model
     metadata_payload = json.dumps(metadata)
     if _is_postgres():
         cursor.execute(
-            "INSERT INTO agent_registry (node_id, alias, skills, models, metadata, availability, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (node_id) DO UPDATE SET alias = EXCLUDED.alias, skills = EXCLUDED.skills, models = EXCLUDED.models, metadata = EXCLUDED.metadata, availability = EXCLUDED.availability, updated_at = EXCLUDED.updated_at",
-            (node_id, alias, skills_payload, models_payload, metadata_payload, availability, updated_at)
+            "INSERT INTO agent_registry (node_id, alias, skills, models, metadata, availability, updated_at, x25519_public_key) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (node_id) DO UPDATE SET alias = EXCLUDED.alias, skills = EXCLUDED.skills, models = EXCLUDED.models, metadata = EXCLUDED.metadata, availability = EXCLUDED.availability, updated_at = EXCLUDED.updated_at, x25519_public_key = EXCLUDED.x25519_public_key",
+            (node_id, alias, skills_payload, models_payload, metadata_payload, availability, updated_at, x25519_public_key)
         )
     else:
         cursor.execute(
-            "INSERT INTO agent_registry (node_id, alias, skills, models, metadata, availability, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(node_id) DO UPDATE SET alias=excluded.alias, skills=excluded.skills, models=excluded.models, metadata=excluded.metadata, availability=excluded.availability, updated_at=excluded.updated_at",
-            (node_id, alias, skills_payload, models_payload, metadata_payload, availability, updated_at)
+            "INSERT INTO agent_registry (node_id, alias, skills, models, metadata, availability, updated_at, x25519_public_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(node_id) DO UPDATE SET alias=excluded.alias, skills=excluded.skills, models=excluded.models, metadata=excluded.metadata, availability=excluded.availability, updated_at=excluded.updated_at, x25519_public_key=excluded.x25519_public_key",
+            (node_id, alias, skills_payload, models_payload, metadata_payload, availability, updated_at, x25519_public_key)
         )
     conn.commit()
     _release_conn(conn)
