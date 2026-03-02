@@ -15,14 +15,16 @@ from typing import Optional
 import aiohttp
 import websockets
 import requests
-from identity_enhanced import MEPIdentityEnhanced
+import time
+import urllib.parse
+from identity import MEPIdentity
 
 HUB_URL = os.getenv("HUB_URL", "https://mep-hub.silentcopilot.ai")
 WS_URL = os.getenv("WS_URL", "wss://mep-hub.silentcopilot.ai")
 
 class MEPAIProvider:
     def __init__(self, key_path: str):
-        self.identity = MEPIdentityEnhanced(key_path)
+        self.identity = MEPIdentity(key_path)
         self.node_id = self.identity.node_id
         self.balance = 0.0
         self.is_mining = True
@@ -30,7 +32,7 @@ class MEPAIProvider:
         os.makedirs(self.workspace_dir, exist_ok=True)
         
         # AI API configuration (override in environment)
-        self.ai_api_cmd = os.getenv("MEP_AI_AGENT_CMD", "echo")
+        self.ai_api_cmd = os.getenv("MEP_AI_AGENT_CMD", "python3 " + os.path.join(os.path.dirname(__file__), "mep_ai_agent.py"))
         
     async def connect(self):
         """Connect to MEP Hub and start mining."""
@@ -41,9 +43,9 @@ class MEPAIProvider:
             resp = requests.post(
                 f"{HUB_URL}/register",
                 json={
-                    "pubkey": "dummy",  # Hub expects this
+                    "pubkey": self.identity.pub_pem,
                     "capabilities": ["ai-agent"],
-                    "x25519_public_key": self.identity.get_x25519_public_key().hex()
+                    "x25519_public_key": ""
                 },
                 headers=self.identity.get_auth_headers(""),
                 timeout=10
@@ -55,29 +57,45 @@ class MEPAIProvider:
             print(f"[AI Provider {self.node_id}] Registration failed: {e}")
             return
         
-        # WebSocket connection
-        uri = f"{WS_URL.replace('https://', 'wss://').replace('http://', 'ws://')}/ws?node_id={self.node_id}"
-        try:
-            async with websockets.connect(uri) as ws:
-                print(f"[AI Provider {self.node_id}] Connected to MEP Hub. Awaiting AI tasks...")
-                
-                while self.is_mining:
-                    try:
-                        msg = await asyncio.wait_for(ws.recv(), timeout=1.0)
-                        data = json.loads(msg)
-                        
-                        if data["event"] == "new_task":
-                            await self.process_task(data["data"])
-                        elif data["event"] == "rfc":
-                            await self.handle_rfc(data["data"])
+        # WebSocket connection loop
+        while self.is_mining:
+            ts = str(int(time.time()))
+            sig = self.identity.sign(self.node_id, ts)
+            safe_sig = urllib.parse.quote(sig)
+            base_ws = WS_URL.replace('https://', 'wss://').replace('http://', 'ws://')
+            uri = f"{base_ws}/ws/{self.node_id}?timestamp={ts}&signature={safe_sig}"
+            
+            try:
+                print(f"[AI Provider {self.node_id}] Connecting to WebSocket...")
+                async with websockets.connect(uri) as ws:
+                    print(f"[AI Provider {self.node_id}] Connected. Awaiting AI tasks...")
+                    
+                    while self.is_mining:
+                        try:
+                            msg = await asyncio.wait_for(ws.recv(), timeout=20.0) # Increased timeout for keepalive
+                            data = json.loads(msg)
                             
-                    except asyncio.TimeoutError:
-                        continue
-                    except websockets.exceptions.ConnectionClosed:
-                        print("[AI Provider] Connection closed")
-                        break
-        except Exception as e:
-            print(f"[AI Provider] WebSocket error: {e}")
+                            if data["event"] == "new_task":
+                                await self.process_task(data["data"])
+                            elif data["event"] == "rfc":
+                                await self.handle_rfc(data["data"])
+                                
+                        except asyncio.TimeoutError:
+                            # Send ping or just continue
+                            try:
+                                await ws.ping()
+                            except:
+                                break
+                            continue
+                        except websockets.exceptions.ConnectionClosed:
+                            print("[AI Provider] Connection closed")
+                            break
+            except Exception as e:
+                print(f"[AI Provider] WebSocket error: {e}")
+                
+            if self.is_mining:
+                print("[AI Provider] Reconnecting in 5 seconds...")
+                await asyncio.sleep(5)
     
     async def handle_rfc(self, rfc_data: dict):
         """Evaluate Request For Compute and submit Bid."""
@@ -208,6 +226,9 @@ class MEPAIProvider:
                 self.balance = data["new_balance"]
                 print(f"[AI Provider] Earned {bounty:.6f} SECONDS!")
                 print(f"  New balance: {self.balance:.6f} SECONDS")
+                
+                # Rate Limit Protection: Sleep briefly to respect API limits
+                time.sleep(2.0) 
             else:
                 print(f"[AI Provider] Failed to submit: {resp.text}")
                 
