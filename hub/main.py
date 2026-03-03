@@ -761,15 +761,21 @@ async def hub_landing(request: Request):
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MEP Hub 0</title>
   <style>
-    body {{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; margin: 40px; color: #111; }}
-    .card {{ border: 1px solid #e5e7eb; border-radius: 12px; padding: 20px; max-width: 720px; }}
-    .kpi {{ font-size: 36px; font-weight: 700; }}
-    .label {{ color: #6b7280; font-size: 14px; }}
-    .row {{ display: flex; gap: 24px; margin-top: 16px; flex-wrap: wrap; }}
-    .section {{ margin-top: 20px; }}
-    .mono {{ background: #f8fafc; padding: 10px; border-radius: 8px; }}
-    a {{ color: #2563eb; text-decoration: none; }}
+    body {{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; margin: 0; padding: 20px; color: #111; background-color: #f9fafb; }}
+    .card {{ background: white; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px; max-width: 720px; margin: 0 auto; box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1); }}
+    .kpi {{ font-size: 32px; font-weight: 700; line-height: 1.2; }}
+    .label {{ color: #6b7280; font-size: 14px; font-weight: 500; }}
+    .row {{ display: flex; gap: 24px; margin-top: 20px; flex-wrap: wrap; }}
+    .section {{ margin-top: 24px; padding-top: 20px; border-top: 1px solid #f3f4f6; }}
+    .mono {{ background: #f8fafc; padding: 12px; border-radius: 8px; font-size: 13px; overflow-wrap: break-word; word-break: break-all; border: 1px solid #e2e8f0; }}
+    a {{ color: #2563eb; text-decoration: none; font-weight: 500; }}
     a:hover {{ text-decoration: underline; }}
+    @media (max-width: 600px) {{
+        body {{ padding: 16px; }}
+        .card {{ padding: 16px; }}
+        .row {{ gap: 16px; }}
+        .kpi {{ font-size: 28px; }}
+    }}
   </style>
 </head>
 <body>
