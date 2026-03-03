@@ -806,17 +806,37 @@ async def hub_landing(request: Request):
     </div>
     <div class="section">
       <div class="label">Health</div>
-      <div><a href="{base_url}/health">{base_url}/health</a></div>
+      <div>
+        <a href="#" onclick="checkHealth(event)">Check Status</a>
+        <div id="health-status" class="mono" style="display:none; margin-top: 8px;"></div>
+      </div>
     </div>
     <div class="section">
       <div class="label">Last task completed</div>
       <div>{last_completed}</div>
     </div>
-    <div class="section">
+    <div class="section" style="padding-bottom: 20px;">
       <div class="label">Auth headers</div>
-      <div>Requests must include x-mep-nodeid, x-mep-timestamp, x-mep-signature.</div>
+      <div style="word-wrap: break-word;">Requests must include x-mep-nodeid, x-mep-timestamp, x-mep-signature.</div>
     </div>
   </div>
+  <script>
+    async function checkHealth(e) {{
+      e.preventDefault();
+      const el = document.getElementById('health-status');
+      el.style.display = 'block';
+      el.innerText = 'Checking...';
+      try {{
+        const res = await fetch('{base_url}/health');
+        const data = await res.json();
+        el.innerText = JSON.stringify(data, null, 2);
+        el.style.color = 'green';
+      }} catch (err) {{
+        el.innerText = 'Error: ' + err.message;
+        el.style.color = 'red';
+      }}
+    }}
+  </script>
 </body>
 </html>"""
     return HTMLResponse(html)
