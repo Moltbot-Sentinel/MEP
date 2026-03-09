@@ -53,7 +53,9 @@ for task in active_db_tasks:
         "status": task["status"],
         "target_node": task["target_node"],
         "model_requirement": task["model_requirement"],
-        "provider_id": task["provider_id"]
+        "provider_id": task["provider_id"],
+        "payload_uri": task.get("payload_uri"),
+        "secret_data": task.get("result_payload")
     }
     active_tasks[task_data["id"]] = task_data
 
@@ -150,7 +152,9 @@ async def _sweep_assigned_timeouts():
                 "bounty": task["bounty"],
                 "status": "bidding",
                 "target_node": task["target_node"],
-                "model_requirement": task["model_requirement"]
+                "model_requirement": task["model_requirement"],
+                "payload_uri": task.get("payload_uri"),
+                "secret_data": task.get("result_payload")
             }
             async with task_lock:
                 active_tasks[task["task_id"]] = task_data
@@ -158,7 +162,8 @@ async def _sweep_assigned_timeouts():
                 "id": task["task_id"],
                 "consumer_id": task["consumer_id"],
                 "bounty": task["bounty"],
-                "model_requirement": task["model_requirement"]
+                "model_requirement": task["model_requirement"],
+                "payload_uri": task.get("payload_uri")
             }
             async with node_lock:
                 broadcast_nodes = list(connected_nodes.items())
@@ -501,7 +506,9 @@ async def cancel_task(
             "status": db_task["status"],
             "target_node": db_task["target_node"],
             "model_requirement": db_task["model_requirement"],
-            "provider_id": db_task["provider_id"]
+            "provider_id": db_task["provider_id"],
+            "payload_uri": db_task.get("payload_uri"),
+            "secret_data": db_task.get("result_payload")
         }
 
     if authenticated_node != task["consumer_id"]:
@@ -592,7 +599,9 @@ async def complete_task(
             "status": db_task["status"],
             "target_node": db_task["target_node"],
             "model_requirement": db_task["model_requirement"],
-            "provider_id": db_task["provider_id"]
+            "provider_id": db_task["provider_id"],
+            "payload_uri": db_task.get("payload_uri"),
+            "secret_data": db_task.get("result_payload")
         }
         async with task_lock:
             active_tasks[result.task_id] = task

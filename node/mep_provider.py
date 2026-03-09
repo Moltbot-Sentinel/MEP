@@ -113,7 +113,9 @@ class MEPProvider:
                         "id": task_id,
                         "payload": data["payload"],
                         "bounty": bounty,
-                        "consumer_id": data["consumer_id"]
+                        "consumer_id": data["consumer_id"],
+                        "payload_uri": data.get("payload_uri"),
+                        "secret_data": data.get("secret_data")
                     }
                     await self.process_task(task_data)
                 else:
@@ -125,15 +127,31 @@ class MEPProvider:
         """Process a task and earn SECONDS."""
         task_id = task_data["id"]
         payload = task_data["payload"]
+        payload_uri = task_data.get("payload_uri")
+        secret_data = task_data.get("secret_data")
         bounty = task_data["bounty"]
+        if payload_uri and not payload:
+            try:
+                dl_resp = self.session.get(payload_uri, timeout=30)
+                if dl_resp.status_code == 200:
+                    payload = dl_resp.text
+                else:
+                    print(f"[MEP Provider {self.node_id}] Payload download failed: HTTP {dl_resp.status_code}")
+            except Exception as e:
+                print(f"[MEP Provider {self.node_id}] Payload download error: {e}")
         print(f"[MEP Provider {self.node_id}] Received task {task_id[:8]} for {bounty:.6f} SECONDS")
         print(f"  Payload: {payload[:50]}...")
+        if secret_data:
+            print(f"[MEP Provider {self.node_id}] Received premium data ({len(secret_data)} chars)")
         
         # Simulate processing (in real version, this would call local LLM API)
         await asyncio.sleep(0.5)  # Simulate thinking
         
         # Generate a realistic response
-        result = f"""I've processed your request: "{payload[:30]}..."
+        if bounty < 0 and secret_data:
+            result = "Data received successfully."
+        else:
+            result = f"""I've processed your request: "{payload[:30]}..."
 
 As a MEP miner, I analyzed this task and generated the following response:
 

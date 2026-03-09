@@ -273,13 +273,13 @@ def create_task(task_id: str, consumer_id: str, payload: str, bounty: float, sta
     cursor = conn.cursor()
     if _is_postgres():
         cursor.execute(
-            "INSERT INTO tasks (task_id, consumer_id, provider_id, payload, bounty, status, target_node, model_requirement, result_payload, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (task_id, consumer_id, None, payload, bounty, status, target_node, model_requirement, result_payload, created_at, created_at)
+            "INSERT INTO tasks (task_id, consumer_id, provider_id, payload, bounty, status, target_node, model_requirement, result_payload, payload_uri, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (task_id, consumer_id, None, payload, bounty, status, target_node, model_requirement, result_payload, payload_uri, created_at, created_at)
         )
     else:
         cursor.execute(
-            "INSERT INTO tasks (task_id, consumer_id, provider_id, payload, bounty, status, target_node, model_requirement, result_payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (task_id, consumer_id, None, payload, bounty, status, target_node, model_requirement, result_payload, created_at, created_at)
+            "INSERT INTO tasks (task_id, consumer_id, provider_id, payload, bounty, status, target_node, model_requirement, result_payload, payload_uri, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (task_id, consumer_id, None, payload, bounty, status, target_node, model_requirement, result_payload, payload_uri, created_at, created_at)
         )
     conn.commit()
     _release_conn(conn)
@@ -305,13 +305,13 @@ def update_task_result(task_id: str, provider_id: str, result_payload: str, stat
     cursor = conn.cursor()
     if _is_postgres():
         cursor.execute(
-            "UPDATE tasks SET provider_id = %s, result_payload = %s, status = %s, updated_at = %s WHERE task_id = %s",
-            (provider_id, result_payload, status, updated_at, task_id)
+            "UPDATE tasks SET provider_id = %s, result_payload = %s, result_uri = %s, status = %s, updated_at = %s WHERE task_id = %s",
+            (provider_id, result_payload, result_uri, status, updated_at, task_id)
         )
     else:
         cursor.execute(
-            "UPDATE tasks SET provider_id = ?, result_payload = ?, status = ?, updated_at = ? WHERE task_id = ?",
-            (provider_id, result_payload, status, updated_at, task_id)
+            "UPDATE tasks SET provider_id = ?, result_payload = ?, result_uri = ?, status = ?, updated_at = ? WHERE task_id = ?",
+            (provider_id, result_payload, result_uri, status, updated_at, task_id)
         )
     conn.commit()
     _release_conn(conn)

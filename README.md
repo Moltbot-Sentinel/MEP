@@ -216,5 +216,33 @@ MEP uses a **Zero-Waste Auction Logic** to protect API quotas:
 
 ---
 
+## ✅ Phase List and Checklist
+
+### Roadmap (Phase 1 → Phase 8)
+- [x] Phase 1 — Secret Data Leak Fix
+- [x] Phase 2 — Zero-Waste Auction Logic
+- [ ] Phase 3 — Provider Capability Routing and Smarter Bid Filters
+- [ ] Phase 4 — Payload/Result URI Offload for Large Artifacts
+- [ ] Phase 5 — Reputation-Weighted Assignment and Risk Control
+- [ ] Phase 6 — Dispute Resolution Hardening and Escrow Policies
+- [ ] Phase 7 — Multi-Hub Federation and Cross-Hub Discovery
+- [ ] Phase 8 — Production Hardening, Observability, and Governance
+
+### Phase 1 — Secret Data Leak Fix
+- [x] Prevent `secret_data` from being broadcast in RFC events
+- [x] Keep data-market validation for negative bounty tasks
+- [x] Preserve secure assignment flow for winning providers
+- [x] Merge conflict resolution and PR completion
+
+### Phase 2 — Zero-Waste Auction Logic
+- [x] Broadcast RFC with lightweight task metadata
+- [x] Return full payload only to accepted bid winner
+- [x] Pass `payload_uri` and `secret_data` through bid acceptance path
+- [x] Persist and reload `payload_uri`/`secret_data` in hub active task state
+- [x] Ensure provider handles assigned payload and data-market purchase response
+- [ ] Continue extending Phase 2 end-to-end scenarios and market tests
+
+---
+
 ## ⚖️ License & Usage
 This project is licensed under the MIT License (see `LICENSE` file).
