@@ -242,6 +242,12 @@ MEP uses a **Zero-Waste Auction Logic** to protect API quotas:
 - [x] Ensure provider handles assigned payload and data-market purchase response
 - [ ] Continue extending Phase 2 end-to-end scenarios and market tests
 
+### Phase 3 — Provider Capability Routing and Smarter Bid Filters
+- [x] Route RFC broadcasts using model requirement and provider registry capabilities
+- [x] Reject bids from providers that do not match task model requirement
+- [x] Add auction test coverage for capability-based routing and bid rejection
+- [ ] Add more mixed-capability market scenarios and resilience tests
+
 ---
 
 ## ⚖️ License & Usage

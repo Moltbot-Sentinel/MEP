@@ -87,6 +87,35 @@ def _normalize_availability(value: Optional[str]) -> Optional[str]:
         raise HTTPException(status_code=400, detail="Invalid availability")
     return normalized
 
+def _normalize_model_requirement(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    return normalized
+
+def _provider_matches_requirement(provider_id: str, model_requirement: Optional[str]) -> bool:
+    if not model_requirement:
+        return True
+    registry = db.get_registry(provider_id)
+    if not registry:
+        return True
+    models = registry.get("models") or []
+    skills = registry.get("skills") or []
+    if not models and not skills:
+        return True
+    return model_requirement in models or model_requirement in skills
+
+def _select_rfc_recipients(consumer_id: str, model_requirement: Optional[str], nodes: list[tuple[str, WebSocket]]) -> list[tuple[str, WebSocket]]:
+    selected: list[tuple[str, WebSocket]] = []
+    for node_id, ws in nodes:
+        if node_id == consumer_id:
+            continue
+        if _provider_matches_requirement(node_id, model_requirement):
+            selected.append((node_id, ws))
+    return selected
+
 def _validate_timestamp(ts: str):
     try:
         ts_int = int(ts)
@@ -158,24 +187,25 @@ async def _sweep_assigned_timeouts():
             }
             async with task_lock:
                 active_tasks[task["task_id"]] = task_data
+            model_requirement = _normalize_model_requirement(task["model_requirement"])
             rfc_data = {
                 "id": task["task_id"],
                 "consumer_id": task["consumer_id"],
                 "bounty": task["bounty"],
-                "model_requirement": task["model_requirement"],
+                "model_requirement": model_requirement,
                 "payload_uri": task.get("payload_uri")
             }
             async with node_lock:
                 broadcast_nodes = list(connected_nodes.items())
-            for node_id, ws in broadcast_nodes:
-                if node_id != task["consumer_id"]:
-                    try:
-                        await ws.send_json({"event": "rfc", "data": rfc_data})
-                    except Exception as exc:
-                        log_event("broadcast_error", f"Failed to send RFC to {node_id}: {exc}", node_id=node_id, task_id=task["task_id"])
-                        async with node_lock:
-                            if connected_nodes.get(node_id) is ws:
-                                del connected_nodes[node_id]
+            candidate_nodes = _select_rfc_recipients(task["consumer_id"], model_requirement, broadcast_nodes)
+            for node_id, ws in candidate_nodes:
+                try:
+                    await ws.send_json({"event": "rfc", "data": rfc_data})
+                except Exception as exc:
+                    log_event("broadcast_error", f"Failed to send RFC to {node_id}: {exc}", node_id=node_id, task_id=task["task_id"])
+                    async with node_lock:
+                        if connected_nodes.get(node_id) is ws:
+                            del connected_nodes[node_id]
             log_event("task_requeued_timeout", f"Task {task['task_id'][:8]} requeued after timeout", task_id=task["task_id"], consumer_id=task["consumer_id"], bounty=task["bounty"])
             continue
         if not db.expire_task_if_assigned(task["task_id"], now):
@@ -456,25 +486,25 @@ async def submit_task(
                 return {"status": "error", "detail": "Target node disconnected"}
         return {"status": "error", "detail": "Target node not currently connected to Hub"}
 
-    # Phase 2: Broadcast RFC (Request For Compute) to all connected nodes EXCEPT the consumer
+    model_requirement = _normalize_model_requirement(task.model_requirement)
     rfc_data = {
         "id": task_id,
         "consumer_id": task.consumer_id,
         "bounty": task.bounty,
-        "model_requirement": task.model_requirement,
+        "model_requirement": model_requirement,
         "payload_uri": task.payload_uri
     }
     async with node_lock:
         broadcast_nodes = list(connected_nodes.items())
-    for node_id, ws in broadcast_nodes:
-        if node_id != task.consumer_id:
-            try:
-                await ws.send_json({"event": "rfc", "data": rfc_data})
-            except Exception as exc:
-                log_event("broadcast_error", f"Failed to send RFC to {node_id}: {exc}", node_id=node_id, task_id=task_id)
-                async with node_lock:
-                    if connected_nodes.get(node_id) is ws:
-                        del connected_nodes[node_id]
+    candidate_nodes = _select_rfc_recipients(task.consumer_id, model_requirement, broadcast_nodes)
+    for node_id, ws in candidate_nodes:
+        try:
+            await ws.send_json({"event": "rfc", "data": rfc_data})
+        except Exception as exc:
+            log_event("broadcast_error", f"Failed to send RFC to {node_id}: {exc}", node_id=node_id, task_id=task_id)
+            async with node_lock:
+                if connected_nodes.get(node_id) is ws:
+                    del connected_nodes[node_id]
 
     response_payload = {"status": "success", "task_id": task_id}
     if x_mep_idempotency_key:
@@ -547,6 +577,9 @@ async def place_bid(bid: TaskBid, authenticated_node: str = Depends(verify_reque
             raise HTTPException(status_code=404, detail="Task not found or already completed")
         if task["status"] != "bidding":
             return {"status": "rejected", "detail": "Task already assigned to another node"}
+        model_requirement = _normalize_model_requirement(task.get("model_requirement"))
+        if not _provider_matches_requirement(bid.provider_id, model_requirement):
+            return {"status": "rejected", "detail": f"Provider does not match model requirement '{model_requirement}'"}
         if not db.assign_task_if_open(bid.task_id, bid.provider_id, time.time()):
             return {"status": "rejected", "detail": "Task already assigned to another node"}
         task["status"] = "assigned"
