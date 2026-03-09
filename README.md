@@ -221,7 +221,7 @@ MEP uses a **Zero-Waste Auction Logic** to protect API quotas:
 ### Roadmap (Phase 1 → Phase 8)
 - [x] Phase 1 — Secret Data Leak Fix
 - [x] Phase 2 — Zero-Waste Auction Logic
-- [ ] Phase 3 — Provider Capability Routing and Smarter Bid Filters
+- [x] Phase 3 — Provider Capability Routing and Smarter Bid Filters
 - [ ] Phase 4 — Payload/Result URI Offload for Large Artifacts
 - [ ] Phase 5 — Reputation-Weighted Assignment and Risk Control
 - [ ] Phase 6 — Dispute Resolution Hardening and Escrow Policies
@@ -247,6 +247,12 @@ MEP uses a **Zero-Waste Auction Logic** to protect API quotas:
 - [x] Reject bids from providers that do not match task model requirement
 - [x] Add auction test coverage for capability-based routing and bid rejection
 - [ ] Add more mixed-capability market scenarios and resilience tests
+
+### Phase 4 — Payload/Result URI Offload for Large Artifacts
+- [x] Accept URI-only task submission when payload is offloaded
+- [x] Accept URI-only task completion when result payload is offloaded
+- [x] Validate URI scheme for payload and result artifact links
+- [x] Add auction test coverage for payload/result URI offload round-trip
 
 ---
 

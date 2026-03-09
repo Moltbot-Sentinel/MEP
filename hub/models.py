@@ -7,7 +7,7 @@ class NodeRegistration(BaseModel):
 
 class TaskCreate(BaseModel):
     consumer_id: str
-    payload: str
+    payload: Optional[str] = None
     bounty: float
     target_node: Optional[str] = None  # Direct messaging / specific bot targeting
     model_requirement: Optional[str] = None
@@ -21,7 +21,7 @@ class TaskBid(BaseModel):
 class TaskResult(BaseModel):
     task_id: str
     provider_id: str
-    result_payload: str
+    result_payload: Optional[str] = None
     result_uri: Optional[str] = None  # IPFS or HTTP link to result payload
 
 class TaskCancel(BaseModel):

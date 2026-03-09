@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 import os
 import ctypes
+from urllib.parse import urlparse
 import db
 import auth
 from logger import log_event, log_audit
@@ -93,6 +94,19 @@ def _normalize_model_requirement(value: Optional[str]) -> Optional[str]:
     normalized = value.strip().lower()
     if not normalized:
         return None
+    return normalized
+
+def _normalize_artifact_uri(value: Optional[str], field_name: str) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if normalized.startswith("ipfs://"):
+        return normalized
+    parsed = urlparse(normalized)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be an http(s) or ipfs URI")
     return normalized
 
 def _provider_matches_requirement(provider_id: str, model_requirement: Optional[str]) -> bool:
@@ -408,7 +422,11 @@ async def submit_task(
     if authenticated_node != task.consumer_id:
         raise HTTPException(status_code=403, detail="Cannot submit tasks on behalf of another node")
 
-    if len(task.payload) > MAX_PAYLOAD_CHARS:
+    normalized_payload_uri = _normalize_artifact_uri(task.payload_uri, "payload_uri")
+    payload = task.payload or ""
+    if not payload and not normalized_payload_uri:
+        raise HTTPException(status_code=400, detail="Task requires payload or payload_uri")
+    if len(payload) > MAX_PAYLOAD_CHARS:
         raise HTTPException(status_code=413, detail="Task payload too large")
     
     if x_mep_idempotency_key:
@@ -446,15 +464,15 @@ async def submit_task(
     task_data = {
         "id": task_id,
         "consumer_id": task.consumer_id,
-        "payload": task.payload,
+        "payload": payload,
         "bounty": task.bounty,
         "status": "bidding",
         "target_node": task.target_node,
         "model_requirement": task.model_requirement,
-        "payload_uri": task.payload_uri,
+        "payload_uri": normalized_payload_uri,
         "secret_data": task.secret_data
     }
-    db.create_task(task_id, task.consumer_id, task.payload, task.bounty, "bidding", task.target_node, task.model_requirement, now, result_payload=task.secret_data, payload_uri=task.payload_uri)
+    db.create_task(task_id, task.consumer_id, payload, task.bounty, "bidding", task.target_node, task.model_requirement, now, result_payload=task.secret_data, payload_uri=normalized_payload_uri)
     async with task_lock:
         active_tasks[task_id] = task_data
 
@@ -492,7 +510,7 @@ async def submit_task(
         "consumer_id": task.consumer_id,
         "bounty": task.bounty,
         "model_requirement": model_requirement,
-        "payload_uri": task.payload_uri
+        "payload_uri": normalized_payload_uri
     }
     async with node_lock:
         broadcast_nodes = list(connected_nodes.items())
@@ -610,7 +628,11 @@ async def complete_task(
     if authenticated_node != result.provider_id:
         raise HTTPException(status_code=403, detail="Cannot complete tasks on behalf of another node")
 
-    if len(result.result_payload) > MAX_PAYLOAD_CHARS:
+    normalized_result_uri = _normalize_artifact_uri(result.result_uri, "result_uri")
+    result_payload = result.result_payload or ""
+    if not result_payload and not normalized_result_uri:
+        raise HTTPException(status_code=400, detail="Task result requires result_payload or result_uri")
+    if len(result_payload) > MAX_PAYLOAD_CHARS:
         raise HTTPException(status_code=413, detail="Result payload too large")
     
     if x_mep_idempotency_key:
@@ -672,11 +694,11 @@ async def complete_task(
     async with task_lock:
         task["status"] = "completed"
         task["provider_id"] = result.provider_id
-        task["result"] = result.result_payload
+        task["result"] = result_payload
         completed_tasks[result.task_id] = task
         if result.task_id in active_tasks:
             del active_tasks[result.task_id]
-    db.update_task_result(result.task_id, result.provider_id, result.result_payload, "completed", time.time(), result_uri=result.result_uri)
+    db.update_task_result(result.task_id, result.provider_id, result_payload, "completed", time.time(), result_uri=normalized_result_uri)
 
     # ROUTE RESULT BACK TO CONSUMER VIA WEBSOCKET
     consumer_id = task["consumer_id"]
@@ -689,8 +711,8 @@ async def complete_task(
                 "data": {
                     "task_id": result.task_id,
                     "provider_id": result.provider_id,
-                    "result_payload": result.result_payload,
-                    "result_uri": result.result_uri,
+                    "result_payload": result_payload,
+                    "result_uri": normalized_result_uri,
                     "bounty_spent": task["bounty"]
                 }
             })

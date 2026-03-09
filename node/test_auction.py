@@ -27,6 +27,10 @@ def update_registry(identity: MEPIdentity, skills: list[str], models: list[str])
     resp = requests.post(f"{HUB_URL}/registry/update", data=payload, headers=headers)
     resp.raise_for_status()
 
+def signed_get(identity: MEPIdentity, path: str):
+    headers = identity.get_auth_headers("")
+    return requests.get(f"{HUB_URL}{path}", headers=headers)
+
 async def test_secret_data_delivery():
     provider = MEPIdentity(f"test_provider_{uuid.uuid4().hex[:6]}.pem")
     consumer = MEPIdentity(f"test_consumer_{uuid.uuid4().hex[:6]}.pem")
@@ -129,6 +133,55 @@ async def test_capability_routing():
         complete_resp.raise_for_status()
         print("Complete response:", complete_resp.json())
 
+async def test_uri_offload():
+    provider = MEPIdentity(f"test_uri_provider_{uuid.uuid4().hex[:6]}.pem")
+    consumer = MEPIdentity(f"test_uri_consumer_{uuid.uuid4().hex[:6]}.pem")
+    requests.post(f"{HUB_URL}/register", json={"pubkey": provider.pub_pem}).raise_for_status()
+    requests.post(f"{HUB_URL}/register", json={"pubkey": consumer.pub_pem}).raise_for_status()
+    async with websockets.connect(auth_ws_url(provider)) as ws:
+        submit_payload = json.dumps({
+            "consumer_id": consumer.node_id,
+            "payload_uri": "https://example.com/huge-task.txt",
+            "bounty": 1.0
+        })
+        submit_headers = consumer.get_auth_headers(submit_payload)
+        submit_headers["Content-Type"] = "application/json"
+        submit_resp = requests.post(f"{HUB_URL}/tasks/submit", data=submit_payload, headers=submit_headers)
+        submit_resp.raise_for_status()
+        task_id = submit_resp.json()["task_id"]
+
+        msg = await asyncio.wait_for(ws.recv(), timeout=2.0)
+        data = json.loads(msg)
+        assert data["event"] == "rfc"
+        assert data["data"]["payload_uri"] == "https://example.com/huge-task.txt"
+
+        bid_payload = json.dumps({"task_id": task_id, "provider_id": provider.node_id})
+        bid_headers = provider.get_auth_headers(bid_payload)
+        bid_headers["Content-Type"] = "application/json"
+        bid_resp = requests.post(f"{HUB_URL}/tasks/bid", data=bid_payload, headers=bid_headers)
+        bid_resp.raise_for_status()
+        bid_data = bid_resp.json()
+        assert bid_data.get("status") == "accepted"
+        assert bid_data.get("payload_uri") == "https://example.com/huge-task.txt"
+        assert bid_data.get("payload") == ""
+
+        complete_payload = json.dumps({
+            "task_id": task_id,
+            "provider_id": provider.node_id,
+            "result_uri": "https://example.com/huge-result.txt"
+        })
+        complete_headers = provider.get_auth_headers(complete_payload)
+        complete_headers["Content-Type"] = "application/json"
+        complete_resp = requests.post(f"{HUB_URL}/tasks/complete", data=complete_payload, headers=complete_headers)
+        complete_resp.raise_for_status()
+
+        result_resp = signed_get(consumer, f"/tasks/result/{task_id}")
+        result_resp.raise_for_status()
+        result_data = result_resp.json()
+        assert result_data.get("result_uri") == "https://example.com/huge-result.txt"
+        assert result_data.get("result_payload") == ""
+
 if __name__ == '__main__':
     asyncio.run(test_secret_data_delivery())
     asyncio.run(test_capability_routing())
+    asyncio.run(test_uri_offload())
