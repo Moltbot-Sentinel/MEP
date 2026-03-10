@@ -94,6 +94,8 @@ class MEPCLIProvider:
                             await self.process_task(data["data"])
                         elif data["event"] == "rfc":
                             await self.handle_rfc(data["data"])
+                        elif data["event"] == "task_result":
+                            await self.handle_task_result(data["data"])
                             
                     except asyncio.TimeoutError:
                         continue
@@ -165,9 +167,105 @@ class MEPCLIProvider:
             print(f"[CLI Provider] Failed to fetch secret data: {e}")
         return None
 
+    def _payload_is_message(self, payload: str) -> bool:
+        """Determine if payload is a message vs executable code.
+        
+        Heuristics for message detection:
+        1. No code blocks (```)
+        2. No shell commands (starts with $, >, etc.)
+        3. Contains natural language markers
+        4. Short length for simple DMs
+        """
+        if not payload or not isinstance(payload, str):
+            return False
+            
+        payload = payload.strip()
+        
+        # Code blocks indicate executable code
+        if "```" in payload:
+            return False
+            
+        # Shell/command indicators
+        if payload.startswith(("$", ">", "#!", "python", "bash", "sh", "curl", "wget")):
+            return False
+            
+        # Very long payloads might be code/data
+        if len(payload) > 1000:
+            return False
+            
+        # Check for common code patterns
+        code_patterns = [
+            "def ", "class ", "import ", "from ", "if __name__",
+            "function(", "const ", "let ", "var ", "print(",
+            "return ", "for ", "while ", "async ", "await "
+        ]
+        for pattern in code_patterns:
+            if pattern in payload:
+                return False
+                
+        # Default to message for safety (better to treat as message than execute)
+        return True
+
+    async def _handle_dm(self, dm_data: dict):
+        """Handle direct messages (0 bounty tasks) by writing to inbox."""
+        import json, time, datetime
+        
+        inbox_entry = {
+            "time": time.time(),
+            "datetime": datetime.datetime.now().isoformat(),
+            "task_id": dm_data.get("id", dm_data.get("task_id", "unknown")),
+            "consumer_id": dm_data.get("consumer_id", "unknown"),
+            "bounty": dm_data.get("bounty", 0),
+            "payload": dm_data.get("payload", "")
+        }
+        
+        inbox_file = "inbox.jsonl"
+        with open(inbox_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(inbox_entry) + "\n")
+        
+        print(f"[CLI Provider] 💌 DM received from {dm_data.get('consumer_id', 'unknown')}")
+        print(f"  Task ID: {inbox_entry['task_id']}")
+        print(f"  Message: {dm_data.get('payload', '')[:80]}...")
+
+    async def handle_task_result(self, result_data: dict):
+        """Handle task_result events (results from tasks we submitted)."""
+        import json, time, datetime
+        
+        task_id = result_data.get("task_id", "unknown")
+        provider_id = result_data.get("provider_id", "unknown")
+        result_payload = result_data.get("result_payload", "")
+        
+        print(f"[CLI Provider] 🎉 TASK RESULT RECEIVED!")
+        print(f"  Task ID: {task_id}")
+        print(f"  From Provider: {provider_id}")
+        print(f"  Result: {result_payload[:100]}...")
+        
+        # Save result to results file
+        result_entry = {
+            "time": time.time(),
+            "datetime": datetime.datetime.now().isoformat(),
+            "task_id": task_id,
+            "provider_id": provider_id,
+            "result_payload": result_payload
+        }
+        
+        results_file = "results.jsonl"
+        with open(results_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(result_entry) + "\n")
+        
+        print(f"  ✅ Result saved to {results_file}")
+
     async def process_task(self, task_data: dict, secret_data: Optional[str] = None):
         """Execute the task using a local CLI agent."""
         task_id = task_data["id"]
+        payload = task_data["payload"]
+        bounty = task_data["bounty"]
+        
+        # ===== DM DETECTION: Handle 0-bounty messages as DMs =====
+        if bounty == 0 and self._payload_is_message(payload):
+            await self._handle_dm(task_data)
+            return
+        # ===== END DM DETECTION =====
         
         # If this is a Data Market purchase, save the secret data!
         if secret_data:
@@ -178,9 +276,8 @@ class MEPCLIProvider:
             with open(data_file, "w", encoding="utf-8") as f:
                 f.write(secret_data)
             print(f"[CLI Provider] 💾 Saved purchased data to {data_file}")
-        payload = task_data["payload"]
+        
         payload_uri = task_data.get("payload_uri")
-        bounty = task_data["bounty"]
         
         try:
             
