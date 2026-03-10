@@ -28,6 +28,15 @@ MAX_BODY_BYTES = 200_000
 MAX_PAYLOAD_CHARS = 20_000
 RATE_LIMIT_WINDOW = 10.0
 RATE_LIMIT_MAX = 50
+
+def get_hub_urls(request: Request) -> tuple:
+    """Get correct Hub and WebSocket URLs for clients."""
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
+    base_url = str(request.base_url).rstrip("/")
+    if forwarded_proto:
+        base_url = base_url.replace("http://", f"{forwarded_proto}://", 1).replace("https://", f"{forwarded_proto}://", 1)
+    ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://")
+    return base_url, ws_url
 MAX_SKEW_SECONDS = 300
 ALLOWED_IPS = [ip.strip() for ip in os.getenv("MEP_ALLOWED_IPS", "").split(",") if ip.strip()]
 REQUEUE_ASSIGNED_ON_START = os.getenv("MEP_REQUEUE_ASSIGNED_ON_START", "false").lower() in ("1", "true", "yes")
@@ -389,7 +398,15 @@ async def register_node(node: NodeRegistration, request: Request):
     log_event("node_registered", f"Node {node_id} registered with starting balance {balance}", node_id=node_id, starting_balance=balance)
     log_audit("REGISTER", node_id, balance, balance, "START_BONUS")
 
-    return {"status": "success", "node_id": node_id, "balance": balance}
+    # Get correct Hub URLs for clients
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
+    if forwarded_proto:
+        hub_url = str(request.base_url).replace(request.url.scheme, forwarded_proto, 1).rstrip("/")
+    else:
+        hub_url = str(request.base_url).rstrip("/")
+    ws_url = hub_url.replace("https://", "wss://").replace("http://", "ws://")
+
+    return {"status": "success", "node_id": node_id, "balance": balance, "hub_url": hub_url, "ws_url": ws_url}
 
 @app.post("/registry/update")
 async def update_registry(payload: RegistryUpdate, authenticated_node: str = Depends(verify_request)):
@@ -410,13 +427,14 @@ async def update_availability(payload: AvailabilityUpdate, authenticated_node: s
     return {"status": "success", "node_id": authenticated_node, "availability": availability}
 
 @app.post("/registry/heartbeat")
-async def registry_heartbeat(payload: RegistryHeartbeat, authenticated_node: str = Depends(verify_request)):
+async def registry_heartbeat(payload: RegistryHeartbeat, request: Request, authenticated_node: str = Depends(verify_request)):
     availability = _normalize_availability(payload.availability)
     if availability is None:
         existing = db.get_registry(authenticated_node)
         availability = existing.get("availability") if existing else "unknown"
     db.update_registry_availability(authenticated_node, availability, time.time())
-    return {"status": "success", "node_id": authenticated_node, "availability": availability}
+    hub_url, ws_url = get_hub_urls(request)
+    return {"status": "success", "node_id": authenticated_node, "availability": availability, "hub_url": hub_url, "ws_url": ws_url}
 
 @app.get("/registry/search")
 async def search_registry(
