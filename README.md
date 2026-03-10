@@ -132,6 +132,8 @@ Set these as needed (Hub service):
 - `MEP_DATABASE_URL` (recommended for production)
 - `MEP_PG_POOL_MIN` and `MEP_PG_POOL_MAX`
 - `MEP_ALLOWED_IPS` for allowlisted clients (comma-separated)
+- `MEP_HUB_ID`, `MEP_FEDERATION_ENABLED`, and `MEP_FEDERATION_PEERS`
+- `MEP_FEDERATION_DISCOVERY_TIMEOUT_SECONDS` and `MEP_FEDERATION_REMOTE_LIMIT`
 
 ---
 
@@ -225,7 +227,7 @@ MEP uses a **Zero-Waste Auction Logic** to protect API quotas:
 - [x] Phase 4 — Payload/Result URI Offload for Large Artifacts
 - [x] Phase 5 — Reputation-Weighted Assignment and Risk Control
 - [x] Phase 6 — Dispute Resolution Hardening and Escrow Policies
-- [ ] Phase 7 — Multi-Hub Federation and Cross-Hub Discovery
+- [x] Phase 7 — Multi-Hub Federation and Cross-Hub Discovery
 - [ ] Phase 8 — Production Hardening, Observability, and Governance
 
 ### Phase 1 — Secret Data Leak Fix
@@ -265,6 +267,12 @@ MEP uses a **Zero-Waste Auction Logic** to protect API quotas:
 - [x] Validate dispute reason length and normalize dispute payloads
 - [x] Add dispute query endpoint with participant authorization checks
 - [x] Harden dispute resolution flow with escrow status checks and audit logs
+
+### Phase 7 — Multi-Hub Federation and Cross-Hub Discovery
+- [x] Add federation peer management endpoints with admin controls
+- [x] Add cross-hub provider discovery endpoint with local and remote merge
+- [x] Return federation routing hints when local RFC candidates are unavailable
+- [x] Add environment controls for federation enablement and discovery limits
 
 ---
 

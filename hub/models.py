@@ -56,3 +56,6 @@ class DisputeOpen(BaseModel):
 class DisputeResolve(BaseModel):
     task_id: str
     resolution: str
+
+class FederationPeerUpsert(BaseModel):
+    hub_url: str
