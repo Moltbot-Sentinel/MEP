@@ -42,6 +42,8 @@ ALLOWED_IPS = [ip.strip() for ip in os.getenv("MEP_ALLOWED_IPS", "").split(",") 
 REQUEUE_ASSIGNED_ON_START = os.getenv("MEP_REQUEUE_ASSIGNED_ON_START", "false").lower() in ("1", "true", "yes")
 ADMIN_KEY = os.getenv("MEP_ADMIN_KEY")
 DISPUTE_WINDOW_SECONDS = int(os.getenv("MEP_DISPUTE_WINDOW_SECONDS", "86400"))
+DISPUTE_REASON_MIN_CHARS = int(os.getenv("MEP_DISPUTE_REASON_MIN_CHARS", "10"))
+DISPUTE_REASON_MAX_CHARS = int(os.getenv("MEP_DISPUTE_REASON_MAX_CHARS", "500"))
 ASSIGNMENT_TIMEOUT_SECONDS = int(os.getenv("MEP_ASSIGNMENT_TIMEOUT_SECONDS", "3600"))
 ASSIGNMENT_SWEEP_INTERVAL_SECONDS = int(os.getenv("MEP_ASSIGNMENT_SWEEP_INTERVAL_SECONDS", "60"))
 TIMEOUT_POLICY = os.getenv("MEP_TIMEOUT_POLICY", "refund").lower()
@@ -128,6 +130,14 @@ def _normalize_artifact_uri(value: Optional[str], field_name: str) -> Optional[s
     parsed = urlparse(normalized)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise HTTPException(status_code=400, detail=f"{field_name} must be an http(s) or ipfs URI")
+    return normalized
+
+def _normalize_dispute_reason(reason: str) -> str:
+    normalized = reason.strip()
+    if len(normalized) < max(1, DISPUTE_REASON_MIN_CHARS):
+        raise HTTPException(status_code=400, detail=f"Dispute reason must be at least {max(1, DISPUTE_REASON_MIN_CHARS)} characters")
+    if len(normalized) > max(DISPUTE_REASON_MAX_CHARS, DISPUTE_REASON_MIN_CHARS):
+        raise HTTPException(status_code=400, detail=f"Dispute reason must be at most {max(DISPUTE_REASON_MAX_CHARS, DISPUTE_REASON_MIN_CHARS)} characters")
     return normalized
 
 def _provider_matches_requirement(provider_id: str, model_requirement: Optional[str]) -> bool:
@@ -842,28 +852,80 @@ async def open_dispute(payload: DisputeOpen, authenticated_node: str = Depends(v
         raise HTTPException(status_code=404, detail="Task not found or not completed")
     if task["consumer_id"] != authenticated_node:
         raise HTTPException(status_code=403, detail="Only the consumer can open a dispute")
+    if float(task.get("bounty", 0.0) or 0.0) <= 0:
+        raise HTTPException(status_code=400, detail="Disputes require escrow-backed positive bounty tasks")
+    escrow = db.get_escrow(payload.task_id)
+    if not escrow or escrow.get("status") not in ("released", "held"):
+        raise HTTPException(status_code=400, detail="Escrow not eligible for dispute")
     if task["updated_at"] and (time.time() - float(task["updated_at"])) > DISPUTE_WINDOW_SECONDS:
         raise HTTPException(status_code=400, detail="Dispute window expired")
-    dispute_id = db.open_dispute(payload.task_id, task["consumer_id"], task["provider_id"], payload.reason, time.time())
+    reason = _normalize_dispute_reason(payload.reason)
+    dispute_id = db.open_dispute(payload.task_id, task["consumer_id"], task["provider_id"], reason, time.time())
     if dispute_id == "exists":
         raise HTTPException(status_code=409, detail="Dispute already exists")
-    return {"status": "success", "dispute_id": dispute_id, "task_id": payload.task_id}
+    log_event("dispute_opened", f"Dispute opened for task {payload.task_id[:8]}", task_id=payload.task_id, consumer_id=task["consumer_id"], provider_id=task["provider_id"])
+    return {
+        "status": "success",
+        "dispute_id": dispute_id,
+        "task_id": payload.task_id,
+        "escrow_status": escrow.get("status"),
+        "reason": reason
+    }
+
+@app.get("/disputes/{task_id}")
+async def get_dispute(task_id: str, authenticated_node: str = Depends(verify_request)):
+    dispute = db.get_dispute(task_id)
+    if not dispute:
+        raise HTTPException(status_code=404, detail="Dispute not found")
+    if authenticated_node not in (dispute["consumer_id"], dispute["provider_id"]):
+        raise HTTPException(status_code=403, detail="Not authorized to view this dispute")
+    escrow = db.get_escrow(task_id)
+    return {
+        "dispute_id": dispute["dispute_id"],
+        "task_id": dispute["task_id"],
+        "consumer_id": dispute["consumer_id"],
+        "provider_id": dispute["provider_id"],
+        "status": dispute["status"],
+        "reason": dispute["reason"],
+        "resolution": dispute.get("resolution"),
+        "created_at": dispute["created_at"],
+        "resolved_at": dispute.get("resolved_at"),
+        "escrow_status": escrow.get("status") if escrow else None
+    }
 
 @app.post("/disputes/resolve")
 async def resolve_dispute(payload: DisputeResolve, x_mep_admin_key: Optional[str] = Header(default=None)):
     _require_admin(x_mep_admin_key)
+    dispute = db.get_dispute(payload.task_id)
+    if not dispute:
+        raise HTTPException(status_code=404, detail="No dispute found for task")
+    if dispute["status"] != "open":
+        raise HTTPException(status_code=409, detail="Dispute is not open")
     resolution = payload.resolution.strip().lower()
     if resolution not in ("consumer", "provider"):
         raise HTTPException(status_code=400, detail="Resolution must be consumer or provider")
+    escrow = db.get_escrow(payload.task_id)
     if resolution == "consumer":
+        if not escrow or escrow.get("status") != "released":
+            raise HTTPException(status_code=400, detail="Escrow not eligible for chargeback")
         chargeback = db.chargeback_escrow(payload.task_id, time.time())
         if chargeback["status"] == "invalid":
             raise HTTPException(status_code=400, detail="Escrow not eligible for chargeback")
         if chargeback["status"] == "insufficient":
             raise HTTPException(status_code=400, detail="Provider lacks funds for chargeback")
+        log_audit("DISPUTE_CHARGEBACK", chargeback["consumer_id"], chargeback["amount"], db.get_balance(chargeback["consumer_id"]), payload.task_id)
     if not db.resolve_dispute(payload.task_id, resolution, time.time()):
         raise HTTPException(status_code=404, detail="No open dispute found")
-    return {"status": "success", "task_id": payload.task_id, "resolution": resolution}
+    log_event("dispute_resolved", f"Dispute resolved for task {payload.task_id[:8]} in favor of {resolution}", task_id=payload.task_id, resolution=resolution)
+    latest = db.get_dispute(payload.task_id) or dispute
+    latest_escrow = db.get_escrow(payload.task_id)
+    return {
+        "status": "success",
+        "task_id": payload.task_id,
+        "resolution": resolution,
+        "dispute_status": latest.get("status"),
+        "escrow_status": latest_escrow.get("status") if latest_escrow else None
+    }
 
 @app.get("/health")
 async def health_check():

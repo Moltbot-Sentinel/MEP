@@ -900,6 +900,26 @@ def open_dispute(task_id: str, consumer_id: str, provider_id: str, reason: str, 
     _release_conn(conn)
     return dispute_id
 
+def get_dispute(task_id: str) -> Optional[dict]:
+    conn = _get_conn()
+    if not _is_postgres():
+        conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute("SELECT * FROM disputes WHERE task_id = %s", (task_id,))
+    else:
+        cursor.execute("SELECT * FROM disputes WHERE task_id = ?", (task_id,))
+    row = cursor.fetchone()
+    if not row:
+        _release_conn(conn)
+        return None
+    if _is_postgres():
+        result = _row_to_dict(cursor, row)
+    else:
+        result = dict(row)
+    _release_conn(conn)
+    return result
+
 def resolve_dispute(task_id: str, resolution: str, resolved_at: float) -> bool:
     conn = _get_conn()
     cursor = conn.cursor()

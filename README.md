@@ -223,8 +223,8 @@ MEP uses a **Zero-Waste Auction Logic** to protect API quotas:
 - [x] Phase 2 — Zero-Waste Auction Logic
 - [x] Phase 3 — Provider Capability Routing and Smarter Bid Filters
 - [x] Phase 4 — Payload/Result URI Offload for Large Artifacts
-- [ ] Phase 5 — Reputation-Weighted Assignment and Risk Control
-- [ ] Phase 6 — Dispute Resolution Hardening and Escrow Policies
+- [x] Phase 5 — Reputation-Weighted Assignment and Risk Control
+- [x] Phase 6 — Dispute Resolution Hardening and Escrow Policies
 - [ ] Phase 7 — Multi-Hub Federation and Cross-Hub Discovery
 - [ ] Phase 8 — Production Hardening, Observability, and Governance
 
@@ -255,10 +255,16 @@ MEP uses a **Zero-Waste Auction Logic** to protect API quotas:
 - [x] Add auction test coverage for payload/result URI offload round-trip
 
 ### Phase 5 — Reputation-Weighted Assignment and Risk Control
-- [ ] Add reputation-weighted scoring for provider assignment
-- [ ] Include availability and capability in assignment score
-- [ ] Add risk thresholds to reject unsafe assignments
-- [ ] Add end-to-end tests for reputation and risk decisions
+- [x] Add reputation-weighted scoring for provider assignment
+- [x] Include availability and capability in assignment score
+- [x] Add risk thresholds to reject unsafe assignments
+- [x] Add end-to-end tests for reputation and risk decisions
+
+### Phase 6 — Dispute Resolution Hardening and Escrow Policies
+- [x] Enforce escrow-backed dispute eligibility for positive-bounty tasks
+- [x] Validate dispute reason length and normalize dispute payloads
+- [x] Add dispute query endpoint with participant authorization checks
+- [x] Harden dispute resolution flow with escrow status checks and audit logs
 
 ---
 

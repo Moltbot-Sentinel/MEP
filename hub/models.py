@@ -51,7 +51,7 @@ class ReputationSubmit(BaseModel):
 
 class DisputeOpen(BaseModel):
     task_id: str
-    reason: str
+    reason: str = Field(..., min_length=10, max_length=500)
 
 class DisputeResolve(BaseModel):
     task_id: str
