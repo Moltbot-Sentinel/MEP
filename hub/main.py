@@ -8,12 +8,13 @@ import json
 from datetime import datetime
 import os
 import ctypes
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode
+from urllib.request import Request as UrlRequest, urlopen
 import db
 import auth
 from logger import log_event, log_audit
 
-from models import NodeRegistration, TaskCreate, TaskResult, TaskBid, TaskCancel, RegistryUpdate, AvailabilityUpdate, RegistryHeartbeat, ReputationSubmit, DisputeOpen, DisputeResolve
+from models import NodeRegistration, TaskCreate, TaskResult, TaskBid, TaskCancel, RegistryUpdate, AvailabilityUpdate, RegistryHeartbeat, ReputationSubmit, DisputeOpen, DisputeResolve, FederationPeerUpsert
 
 app = FastAPI(title="Chronos Protocol L1 Hub", description="The Time Exchange Clearinghouse", version="0.1.2")
 
@@ -28,11 +29,22 @@ MAX_BODY_BYTES = 200_000
 MAX_PAYLOAD_CHARS = 20_000
 RATE_LIMIT_WINDOW = 10.0
 RATE_LIMIT_MAX = 50
+
+def get_hub_urls(request: Request) -> tuple:
+    """Get correct Hub and WebSocket URLs for clients."""
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
+    base_url = str(request.base_url).rstrip("/")
+    if forwarded_proto:
+        base_url = base_url.replace("http://", f"{forwarded_proto}://", 1).replace("https://", f"{forwarded_proto}://", 1)
+    ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://")
+    return base_url, ws_url
 MAX_SKEW_SECONDS = 300
 ALLOWED_IPS = [ip.strip() for ip in os.getenv("MEP_ALLOWED_IPS", "").split(",") if ip.strip()]
 REQUEUE_ASSIGNED_ON_START = os.getenv("MEP_REQUEUE_ASSIGNED_ON_START", "false").lower() in ("1", "true", "yes")
 ADMIN_KEY = os.getenv("MEP_ADMIN_KEY")
 DISPUTE_WINDOW_SECONDS = int(os.getenv("MEP_DISPUTE_WINDOW_SECONDS", "86400"))
+DISPUTE_REASON_MIN_CHARS = int(os.getenv("MEP_DISPUTE_REASON_MIN_CHARS", "10"))
+DISPUTE_REASON_MAX_CHARS = int(os.getenv("MEP_DISPUTE_REASON_MAX_CHARS", "500"))
 ASSIGNMENT_TIMEOUT_SECONDS = int(os.getenv("MEP_ASSIGNMENT_TIMEOUT_SECONDS", "3600"))
 ASSIGNMENT_SWEEP_INTERVAL_SECONDS = int(os.getenv("MEP_ASSIGNMENT_SWEEP_INTERVAL_SECONDS", "60"))
 TIMEOUT_POLICY = os.getenv("MEP_TIMEOUT_POLICY", "refund").lower()
@@ -50,6 +62,17 @@ RISK_REJECT_AVAILABILITY = {
     if item.strip()
 }
 RFC_TOP_K = int(os.getenv("MEP_RFC_TOP_K", "0"))
+HUB_ID = os.getenv("MEP_HUB_ID", "hub-0").strip() or "hub-0"
+FEDERATION_ENABLED = os.getenv("MEP_FEDERATION_ENABLED", "false").lower() in ("1", "true", "yes")
+FEDERATION_DISCOVERY_TIMEOUT_SECONDS = float(os.getenv("MEP_FEDERATION_DISCOVERY_TIMEOUT_SECONDS", "2.0"))
+FEDERATION_REMOTE_LIMIT = int(os.getenv("MEP_FEDERATION_REMOTE_LIMIT", "20"))
+FEDERATION_SEED_PEERS = {
+    item.strip().rstrip("/")
+    for item in os.getenv("MEP_FEDERATION_PEERS", "").split(",")
+    if item.strip()
+}
+federation_peer_lock = asyncio.Lock()
+dynamic_federation_peers: set[str] = set()
 active_db_tasks = db.get_active_tasks()
 if REQUEUE_ASSIGNED_ON_START and active_db_tasks:
     now = time.time()
@@ -120,6 +143,128 @@ def _normalize_artifact_uri(value: Optional[str], field_name: str) -> Optional[s
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise HTTPException(status_code=400, detail=f"{field_name} must be an http(s) or ipfs URI")
     return normalized
+
+def _normalize_dispute_reason(reason: str) -> str:
+    normalized = reason.strip()
+    if len(normalized) < max(1, DISPUTE_REASON_MIN_CHARS):
+        raise HTTPException(status_code=400, detail=f"Dispute reason must be at least {max(1, DISPUTE_REASON_MIN_CHARS)} characters")
+    if len(normalized) > max(DISPUTE_REASON_MAX_CHARS, DISPUTE_REASON_MIN_CHARS):
+        raise HTTPException(status_code=400, detail=f"Dispute reason must be at most {max(DISPUTE_REASON_MAX_CHARS, DISPUTE_REASON_MIN_CHARS)} characters")
+    return normalized
+
+def _normalize_hub_url(value: str) -> str:
+    normalized = value.strip().rstrip("/")
+    parsed = urlparse(normalized)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="hub_url must be an http(s) URL")
+    return normalized
+
+async def _list_federation_peers() -> list[str]:
+    async with federation_peer_lock:
+        peers = set(dynamic_federation_peers)
+    peers.update(FEDERATION_SEED_PEERS)
+    return sorted(peers)
+
+def _build_registry_query(
+    alias: Optional[str],
+    skill: Optional[str],
+    model: Optional[str],
+    availability: Optional[str],
+    min_score: Optional[float],
+    min_reviews: Optional[int],
+    max_age_minutes: Optional[float],
+    limit: int
+) -> dict:
+    safe_limit = max(1, min(limit, 100))
+    safe_min_score = min_score if min_score is None else max(0.0, min(min_score, 5.0))
+    safe_min_reviews = min_reviews if min_reviews is None else max(0, min_reviews)
+    if max_age_minutes is None:
+        safe_max_age = DEFAULT_REGISTRY_MAX_AGE_MINUTES if DEFAULT_REGISTRY_MAX_AGE_MINUTES > 0 else None
+    else:
+        safe_max_age = max(0.0, max_age_minutes)
+    min_updated_at = None if safe_max_age is None else time.time() - safe_max_age * 60.0
+    normalized_alias = alias.strip().lower() if alias else None
+    normalized_skill = skill.strip().lower() if skill else None
+    normalized_model = model.strip().lower() if model else None
+    normalized_availability = _normalize_availability(availability) if availability else None
+    return {
+        "safe_limit": safe_limit,
+        "safe_min_score": safe_min_score,
+        "safe_min_reviews": safe_min_reviews,
+        "min_updated_at": min_updated_at,
+        "normalized_alias": normalized_alias,
+        "normalized_skill": normalized_skill,
+        "normalized_model": normalized_model,
+        "normalized_availability": normalized_availability
+    }
+
+def _search_registry_local(query: dict) -> list[dict]:
+    return db.search_registry(
+        query["normalized_alias"],
+        query["normalized_skill"],
+        query["normalized_model"],
+        query["normalized_availability"],
+        query["safe_min_score"],
+        query["safe_min_reviews"],
+        query["min_updated_at"],
+        query["safe_limit"]
+    )
+
+def _fetch_peer_registry_results(peer_url: str, query: dict) -> list[dict]:
+    params = {
+        "limit": query["safe_limit"]
+    }
+    if query["normalized_alias"]:
+        params["alias"] = query["normalized_alias"]
+    if query["normalized_skill"]:
+        params["skill"] = query["normalized_skill"]
+    if query["normalized_model"]:
+        params["model"] = query["normalized_model"]
+    if query["normalized_availability"]:
+        params["availability"] = query["normalized_availability"]
+    if query["safe_min_score"] is not None:
+        params["min_score"] = query["safe_min_score"]
+    if query["safe_min_reviews"] is not None:
+        params["min_reviews"] = query["safe_min_reviews"]
+    if query["min_updated_at"] is not None:
+        age_minutes = max(0.0, (time.time() - query["min_updated_at"]) / 60.0)
+        params["max_age_minutes"] = round(age_minutes, 4)
+    req = UrlRequest(f"{peer_url}/registry/search?{urlencode(params)}", headers={"Accept": "application/json"})
+    with urlopen(req, timeout=max(0.5, FEDERATION_DISCOVERY_TIMEOUT_SECONDS)) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict):
+        return []
+    results = payload.get("results", [])
+    if not isinstance(results, list):
+        return []
+    normalized_results: list[dict] = []
+    for item in results:
+        if isinstance(item, dict):
+            enriched = dict(item)
+            enriched["source_hub"] = enriched.get("source_hub") or peer_url
+            enriched["source_hub_url"] = enriched.get("source_hub_url") or peer_url
+            normalized_results.append(enriched)
+    return normalized_results
+
+async def _discover_remote_registry(query: dict) -> tuple[list[dict], list[dict]]:
+    if not FEDERATION_ENABLED:
+        return [], []
+    peer_urls = await _list_federation_peers()
+    if not peer_urls:
+        return [], []
+    tasks = [asyncio.to_thread(_fetch_peer_registry_results, peer_url, query) for peer_url in peer_urls]
+    responses = await asyncio.gather(*tasks, return_exceptions=True)
+    merged: list[dict] = []
+    peer_stats: list[dict] = []
+    for peer_url, result in zip(peer_urls, responses):
+        if isinstance(result, Exception):
+            log_event("federation_discovery_error", f"Peer discovery failed for {peer_url}: {result}", hub_url=peer_url)
+            continue
+        if not isinstance(result, list):
+            continue
+        merged.extend(result)
+        peer_stats.append({"hub_url": peer_url, "count": len(result)})
+    return merged, peer_stats
 
 def _provider_matches_requirement(provider_id: str, model_requirement: Optional[str]) -> bool:
     if not model_requirement:
@@ -389,7 +534,15 @@ async def register_node(node: NodeRegistration, request: Request):
     log_event("node_registered", f"Node {node_id} registered with starting balance {balance}", node_id=node_id, starting_balance=balance)
     log_audit("REGISTER", node_id, balance, balance, "START_BONUS")
 
-    return {"status": "success", "node_id": node_id, "balance": balance}
+    # Get correct Hub URLs for clients
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
+    if forwarded_proto:
+        hub_url = str(request.base_url).replace(request.url.scheme, forwarded_proto, 1).rstrip("/")
+    else:
+        hub_url = str(request.base_url).rstrip("/")
+    ws_url = hub_url.replace("https://", "wss://").replace("http://", "ws://")
+
+    return {"status": "success", "node_id": node_id, "balance": balance, "hub_url": hub_url, "ws_url": ws_url}
 
 @app.post("/registry/update")
 async def update_registry(payload: RegistryUpdate, authenticated_node: str = Depends(verify_request)):
@@ -410,13 +563,14 @@ async def update_availability(payload: AvailabilityUpdate, authenticated_node: s
     return {"status": "success", "node_id": authenticated_node, "availability": availability}
 
 @app.post("/registry/heartbeat")
-async def registry_heartbeat(payload: RegistryHeartbeat, authenticated_node: str = Depends(verify_request)):
+async def registry_heartbeat(payload: RegistryHeartbeat, request: Request, authenticated_node: str = Depends(verify_request)):
     availability = _normalize_availability(payload.availability)
     if availability is None:
         existing = db.get_registry(authenticated_node)
         availability = existing.get("availability") if existing else "unknown"
     db.update_registry_availability(authenticated_node, availability, time.time())
-    return {"status": "success", "node_id": authenticated_node, "availability": availability}
+    hub_url, ws_url = get_hub_urls(request)
+    return {"status": "success", "node_id": authenticated_node, "availability": availability, "hub_url": hub_url, "ws_url": ws_url}
 
 @app.get("/registry/search")
 async def search_registry(
@@ -429,20 +583,73 @@ async def search_registry(
     max_age_minutes: Optional[float] = None,
     limit: int = 20
 ):
-    safe_limit = max(1, min(limit, 100))
-    safe_min_score = min_score if min_score is None else max(0.0, min(min_score, 5.0))
-    safe_min_reviews = min_reviews if min_reviews is None else max(0, min_reviews)
-    if max_age_minutes is None:
-        safe_max_age = DEFAULT_REGISTRY_MAX_AGE_MINUTES if DEFAULT_REGISTRY_MAX_AGE_MINUTES > 0 else None
-    else:
-        safe_max_age = max(0.0, max_age_minutes)
-    min_updated_at = None if safe_max_age is None else time.time() - safe_max_age * 60.0
-    normalized_alias = alias.strip().lower() if alias else None
-    normalized_skill = skill.strip().lower() if skill else None
-    normalized_model = model.strip().lower() if model else None
-    normalized_availability = _normalize_availability(availability) if availability else None
-    results = db.search_registry(normalized_alias, normalized_skill, normalized_model, normalized_availability, safe_min_score, safe_min_reviews, min_updated_at, safe_limit)
+    query = _build_registry_query(alias, skill, model, availability, min_score, min_reviews, max_age_minutes, limit)
+    results = _search_registry_local(query)
     return {"count": len(results), "results": results}
+
+@app.get("/federation/peers")
+async def get_federation_peers():
+    peers = await _list_federation_peers()
+    return {"enabled": FEDERATION_ENABLED, "hub_id": HUB_ID, "count": len(peers), "peers": peers}
+
+@app.post("/federation/peers")
+async def add_federation_peer(payload: FederationPeerUpsert, x_mep_admin_key: Optional[str] = Header(default=None)):
+    _require_admin(x_mep_admin_key)
+    normalized_hub_url = _normalize_hub_url(payload.hub_url)
+    async with federation_peer_lock:
+        dynamic_federation_peers.add(normalized_hub_url)
+    peers = await _list_federation_peers()
+    return {"status": "success", "hub_url": normalized_hub_url, "count": len(peers), "peers": peers}
+
+@app.delete("/federation/peers")
+async def remove_federation_peer(hub_url: str, x_mep_admin_key: Optional[str] = Header(default=None)):
+    _require_admin(x_mep_admin_key)
+    normalized_hub_url = _normalize_hub_url(hub_url)
+    async with federation_peer_lock:
+        removed = normalized_hub_url in dynamic_federation_peers
+        if removed:
+            dynamic_federation_peers.remove(normalized_hub_url)
+    peers = await _list_federation_peers()
+    return {"status": "success", "hub_url": normalized_hub_url, "removed": removed, "count": len(peers), "peers": peers}
+
+@app.get("/federation/discovery")
+async def federation_discovery(
+    alias: Optional[str] = None,
+    skill: Optional[str] = None,
+    model: Optional[str] = None,
+    availability: Optional[str] = None,
+    min_score: Optional[float] = None,
+    min_reviews: Optional[int] = None,
+    max_age_minutes: Optional[float] = None,
+    limit: int = 20,
+    include_local: bool = True
+):
+    query = _build_registry_query(alias, skill, model, availability, min_score, min_reviews, max_age_minutes, min(limit, FEDERATION_REMOTE_LIMIT))
+    local_results = _search_registry_local(query) if include_local else []
+    for item in local_results:
+        item["source_hub"] = HUB_ID
+        item["source_hub_url"] = None
+    remote_results, peer_stats = await _discover_remote_registry(query)
+    merged: list[dict] = []
+    seen_node_ids: set[str] = set()
+    for item in local_results + remote_results:
+        node_id = str(item.get("node_id", "")).strip()
+        if not node_id or node_id in seen_node_ids:
+            continue
+        merged.append(item)
+        seen_node_ids.add(node_id)
+        if len(merged) >= max(1, min(limit, 100)):
+            break
+    return {
+        "status": "success",
+        "hub_id": HUB_ID,
+        "federation_enabled": FEDERATION_ENABLED,
+        "count": len(merged),
+        "local_count": len(local_results),
+        "remote_count": len(remote_results),
+        "peer_stats": peer_stats,
+        "results": merged
+    }
 
 @app.get("/registry/{node_id}")
 async def get_registry(node_id: str):
@@ -596,6 +803,21 @@ async def submit_task(
                     del connected_nodes[node_id]
 
     response_payload = {"status": "success", "task_id": task_id}
+    if not candidate_nodes and FEDERATION_ENABLED:
+        discovery_query = _build_registry_query(
+            alias=None,
+            skill=None,
+            model=model_requirement,
+            availability="online",
+            min_score=None,
+            min_reviews=None,
+            max_age_minutes=DEFAULT_REGISTRY_MAX_AGE_MINUTES if DEFAULT_REGISTRY_MAX_AGE_MINUTES > 0 else None,
+            limit=min(20, FEDERATION_REMOTE_LIMIT)
+        )
+        _, peer_stats = await _discover_remote_registry(discovery_query)
+        routed_hubs = [item for item in peer_stats if item["count"] > 0]
+        if routed_hubs:
+            response_payload["federation_hints"] = routed_hubs
     if x_mep_idempotency_key:
         db.set_idempotency(authenticated_node, "/tasks/submit", x_mep_idempotency_key, response_payload, 200, time.time())
     return response_payload
@@ -824,28 +1046,80 @@ async def open_dispute(payload: DisputeOpen, authenticated_node: str = Depends(v
         raise HTTPException(status_code=404, detail="Task not found or not completed")
     if task["consumer_id"] != authenticated_node:
         raise HTTPException(status_code=403, detail="Only the consumer can open a dispute")
+    if float(task.get("bounty", 0.0) or 0.0) <= 0:
+        raise HTTPException(status_code=400, detail="Disputes require escrow-backed positive bounty tasks")
+    escrow = db.get_escrow(payload.task_id)
+    if not escrow or escrow.get("status") not in ("released", "held"):
+        raise HTTPException(status_code=400, detail="Escrow not eligible for dispute")
     if task["updated_at"] and (time.time() - float(task["updated_at"])) > DISPUTE_WINDOW_SECONDS:
         raise HTTPException(status_code=400, detail="Dispute window expired")
-    dispute_id = db.open_dispute(payload.task_id, task["consumer_id"], task["provider_id"], payload.reason, time.time())
+    reason = _normalize_dispute_reason(payload.reason)
+    dispute_id = db.open_dispute(payload.task_id, task["consumer_id"], task["provider_id"], reason, time.time())
     if dispute_id == "exists":
         raise HTTPException(status_code=409, detail="Dispute already exists")
-    return {"status": "success", "dispute_id": dispute_id, "task_id": payload.task_id}
+    log_event("dispute_opened", f"Dispute opened for task {payload.task_id[:8]}", task_id=payload.task_id, consumer_id=task["consumer_id"], provider_id=task["provider_id"])
+    return {
+        "status": "success",
+        "dispute_id": dispute_id,
+        "task_id": payload.task_id,
+        "escrow_status": escrow.get("status"),
+        "reason": reason
+    }
+
+@app.get("/disputes/{task_id}")
+async def get_dispute(task_id: str, authenticated_node: str = Depends(verify_request)):
+    dispute = db.get_dispute(task_id)
+    if not dispute:
+        raise HTTPException(status_code=404, detail="Dispute not found")
+    if authenticated_node not in (dispute["consumer_id"], dispute["provider_id"]):
+        raise HTTPException(status_code=403, detail="Not authorized to view this dispute")
+    escrow = db.get_escrow(task_id)
+    return {
+        "dispute_id": dispute["dispute_id"],
+        "task_id": dispute["task_id"],
+        "consumer_id": dispute["consumer_id"],
+        "provider_id": dispute["provider_id"],
+        "status": dispute["status"],
+        "reason": dispute["reason"],
+        "resolution": dispute.get("resolution"),
+        "created_at": dispute["created_at"],
+        "resolved_at": dispute.get("resolved_at"),
+        "escrow_status": escrow.get("status") if escrow else None
+    }
 
 @app.post("/disputes/resolve")
 async def resolve_dispute(payload: DisputeResolve, x_mep_admin_key: Optional[str] = Header(default=None)):
     _require_admin(x_mep_admin_key)
+    dispute = db.get_dispute(payload.task_id)
+    if not dispute:
+        raise HTTPException(status_code=404, detail="No dispute found for task")
+    if dispute["status"] != "open":
+        raise HTTPException(status_code=409, detail="Dispute is not open")
     resolution = payload.resolution.strip().lower()
     if resolution not in ("consumer", "provider"):
         raise HTTPException(status_code=400, detail="Resolution must be consumer or provider")
+    escrow = db.get_escrow(payload.task_id)
     if resolution == "consumer":
+        if not escrow or escrow.get("status") != "released":
+            raise HTTPException(status_code=400, detail="Escrow not eligible for chargeback")
         chargeback = db.chargeback_escrow(payload.task_id, time.time())
         if chargeback["status"] == "invalid":
             raise HTTPException(status_code=400, detail="Escrow not eligible for chargeback")
         if chargeback["status"] == "insufficient":
             raise HTTPException(status_code=400, detail="Provider lacks funds for chargeback")
+        log_audit("DISPUTE_CHARGEBACK", chargeback["consumer_id"], chargeback["amount"], db.get_balance(chargeback["consumer_id"]), payload.task_id)
     if not db.resolve_dispute(payload.task_id, resolution, time.time()):
         raise HTTPException(status_code=404, detail="No open dispute found")
-    return {"status": "success", "task_id": payload.task_id, "resolution": resolution}
+    log_event("dispute_resolved", f"Dispute resolved for task {payload.task_id[:8]} in favor of {resolution}", task_id=payload.task_id, resolution=resolution)
+    latest = db.get_dispute(payload.task_id) or dispute
+    latest_escrow = db.get_escrow(payload.task_id)
+    return {
+        "status": "success",
+        "task_id": payload.task_id,
+        "resolution": resolution,
+        "dispute_status": latest.get("status"),
+        "escrow_status": latest_escrow.get("status") if latest_escrow else None
+    }
 
 @app.get("/health")
 async def health_check():

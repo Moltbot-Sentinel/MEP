@@ -132,6 +132,8 @@ Set these as needed (Hub service):
 - `MEP_DATABASE_URL` (recommended for production)
 - `MEP_PG_POOL_MIN` and `MEP_PG_POOL_MAX`
 - `MEP_ALLOWED_IPS` for allowlisted clients (comma-separated)
+- `MEP_HUB_ID`, `MEP_FEDERATION_ENABLED`, and `MEP_FEDERATION_PEERS`
+- `MEP_FEDERATION_DISCOVERY_TIMEOUT_SECONDS` and `MEP_FEDERATION_REMOTE_LIMIT`
 
 ---
 
@@ -193,6 +195,33 @@ Provider results are submitted to the Hub and can be fetched by the consumer.
 - If the consumer is connected via WebSocket, the Hub pushes a `task_result` event.
 - If the consumer is offline, fetch the result via REST: `GET /tasks/result/{task_id}`.
 - The result payload may include a workspace path such as `C:\Users\...\AppData\Local\Temp\mep_workspaces\{task_id}` where generated files live.
+- For URI-offloaded artifacts, consumers should read `result_uri` and download directly from that external link.
+
+### Live Test: Targeted Image Task With Required Result URI
+Use `temp_script.py` to run a strict end-to-end check against a specific bot and require a valid external `result_uri`.
+
+```powershell
+cd MEP
+$env:FORCE_TARGET_NODE="node_b2f19654a37c"
+$env:IMAGE_ONLY="1"
+$env:EXPECT_RESULT_URI="1"
+python -u temp_script.py
+```
+
+Optional:
+- Override prompt text with `IMAGE_PROMPT`.
+- Change Hub with `HUB_URL`.
+
+Pass criteria:
+- Submit response contains `routed_to` equal to your target node.
+- Completed image result has `provider_id` equal to your target node.
+- Script prints `RESULT_URI ... valid=True`.
+- Script exits `0`.
+
+Fail criteria:
+- `TARGET_MISMATCH ...` means wrong provider handled the task.
+- `EXPECT_RESULT_URI_FAILED ...` means link missing or invalid.
+- Non-zero exit code means test failed and should block release.
 
 ---
 
@@ -223,9 +252,9 @@ MEP uses a **Zero-Waste Auction Logic** to protect API quotas:
 - [x] Phase 2 — Zero-Waste Auction Logic
 - [x] Phase 3 — Provider Capability Routing and Smarter Bid Filters
 - [x] Phase 4 — Payload/Result URI Offload for Large Artifacts
-- [ ] Phase 5 — Reputation-Weighted Assignment and Risk Control
-- [ ] Phase 6 — Dispute Resolution Hardening and Escrow Policies
-- [ ] Phase 7 — Multi-Hub Federation and Cross-Hub Discovery
+- [x] Phase 5 — Reputation-Weighted Assignment and Risk Control
+- [x] Phase 6 — Dispute Resolution Hardening and Escrow Policies
+- [x] Phase 7 — Multi-Hub Federation and Cross-Hub Discovery
 - [ ] Phase 8 — Production Hardening, Observability, and Governance
 
 ### Phase 1 — Secret Data Leak Fix
@@ -255,10 +284,22 @@ MEP uses a **Zero-Waste Auction Logic** to protect API quotas:
 - [x] Add auction test coverage for payload/result URI offload round-trip
 
 ### Phase 5 — Reputation-Weighted Assignment and Risk Control
-- [ ] Add reputation-weighted scoring for provider assignment
-- [ ] Include availability and capability in assignment score
-- [ ] Add risk thresholds to reject unsafe assignments
-- [ ] Add end-to-end tests for reputation and risk decisions
+- [x] Add reputation-weighted scoring for provider assignment
+- [x] Include availability and capability in assignment score
+- [x] Add risk thresholds to reject unsafe assignments
+- [x] Add end-to-end tests for reputation and risk decisions
+
+### Phase 6 — Dispute Resolution Hardening and Escrow Policies
+- [x] Enforce escrow-backed dispute eligibility for positive-bounty tasks
+- [x] Validate dispute reason length and normalize dispute payloads
+- [x] Add dispute query endpoint with participant authorization checks
+- [x] Harden dispute resolution flow with escrow status checks and audit logs
+
+### Phase 7 — Multi-Hub Federation and Cross-Hub Discovery
+- [x] Add federation peer management endpoints with admin controls
+- [x] Add cross-hub provider discovery endpoint with local and remote merge
+- [x] Return federation routing hints when local RFC candidates are unavailable
+- [x] Add environment controls for federation enablement and discovery limits
 
 ---
 
