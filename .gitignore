@@ -11,3 +11,5 @@ hub/__pycache__/
 node/__pycache__/
 hub_data/
 .env
+.env.*
+!.env.example
