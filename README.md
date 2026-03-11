@@ -195,6 +195,33 @@ Provider results are submitted to the Hub and can be fetched by the consumer.
 - If the consumer is connected via WebSocket, the Hub pushes a `task_result` event.
 - If the consumer is offline, fetch the result via REST: `GET /tasks/result/{task_id}`.
 - The result payload may include a workspace path such as `C:\Users\...\AppData\Local\Temp\mep_workspaces\{task_id}` where generated files live.
+- For URI-offloaded artifacts, consumers should read `result_uri` and download directly from that external link.
+
+### Live Test: Targeted Image Task With Required Result URI
+Use `temp_script.py` to run a strict end-to-end check against a specific bot and require a valid external `result_uri`.
+
+```powershell
+cd MEP
+$env:FORCE_TARGET_NODE="node_b2f19654a37c"
+$env:IMAGE_ONLY="1"
+$env:EXPECT_RESULT_URI="1"
+python -u temp_script.py
+```
+
+Optional:
+- Override prompt text with `IMAGE_PROMPT`.
+- Change Hub with `HUB_URL`.
+
+Pass criteria:
+- Submit response contains `routed_to` equal to your target node.
+- Completed image result has `provider_id` equal to your target node.
+- Script prints `RESULT_URI ... valid=True`.
+- Script exits `0`.
+
+Fail criteria:
+- `TARGET_MISMATCH ...` means wrong provider handled the task.
+- `EXPECT_RESULT_URI_FAILED ...` means link missing or invalid.
+- Non-zero exit code means test failed and should block release.
 
 ---
 
