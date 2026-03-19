@@ -940,7 +940,8 @@ async def complete_task(
         task = active_tasks.get(result.task_id)
     if not task:
         db_task = db.get_task(result.task_id)
-        if not db_task or db_task["status"] not in ("bidding", "assigned"):
+        # FIX: Allow more statuses for task completion (bidding, assigned, pending)
+        if not db_task or db_task["status"] not in ("bidding", "assigned", "pending"):
             raise HTTPException(status_code=404, detail="Task not found or already claimed")
         task = {
             "id": db_task["task_id"],
