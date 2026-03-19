@@ -940,7 +940,6 @@ async def complete_task(
         task = active_tasks.get(result.task_id)
     if not task:
         db_task = db.get_task(result.task_id)
-        # FIX: Allow more statuses for task completion (bidding, assigned, pending)
         if not db_task or db_task["status"] not in ("bidding", "assigned", "pending"):
             raise HTTPException(status_code=404, detail="Task not found or already claimed")
         task = {
@@ -957,6 +956,12 @@ async def complete_task(
         }
         async with task_lock:
             active_tasks[result.task_id] = task
+
+    expected_provider = task.get("provider_id") or task.get("target_node")
+    if expected_provider and expected_provider != result.provider_id:
+        raise HTTPException(status_code=403, detail="Task is assigned to a different provider")
+    if task.get("status") == "assigned" and not expected_provider:
+        raise HTTPException(status_code=409, detail="Assigned task is missing provider assignment")
 
     provider_balance = db.get_balance(result.provider_id)
     if provider_balance is None:
