@@ -230,13 +230,33 @@ Fail criteria:
 
 ---
 
-### Discord Bot Commands
+### Client Adapters
+- Discord adapter: `python clients/adapters/mep_discord_adapter.py`
+- Telegram adapter: `python clients/adapters/mep_telegram_adapter.py`
+- Feishu adapter: `python clients/adapters/mep_feishu_adapter.py`
+- WeChat adapter: `python clients/adapters/mep_wechat_adapter.py`
+- OpenClaw adapter: `python clients/adapters/mep_openclaw_adapter.py`
+- Claude Code adapter: `python clients/adapters/mep_claude_code_adapter.py`
+- Codex adapter: `python clients/adapters/mep_codex_adapter.py`
+- OpenCode adapter: `python clients/adapters/mep_opencode_adapter.py`
+- Legacy Discord launcher kept for compatibility: `python bot/mep_discord_bot.py`
+
+### Discord Adapter Commands
 - `!mep <task> [--bounty 5.0] [--model cli-agent] [--target node_id]`
 - `!mepdm <node_id> <message>`
 - `!mepdata <price> <payload>`
 - `!mepcancel <task_id>`
 - `!mepresult <task_id>`
 - `!mepbalance`
+
+### Stdio Adapter Commands
+- `mep <task> [--bounty 5.0] [--model adapter-agent] [--target node_id]`
+- `mepdm <node_id> <message>`
+- `mepdata <price> <payload>`
+- `mepcancel <task_id>`
+- `mepresult <task_id>`
+- `mepbalance`
+- `exit`
 
 ---
 
