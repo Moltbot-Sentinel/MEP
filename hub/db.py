@@ -471,6 +471,24 @@ def get_last_completed_task_time() -> Optional[float]:
     _release_conn(conn)
     return float(row[0]) if row else None
 
+def check_database_health() -> dict:
+    conn = None
+    try:
+        conn = _get_conn()
+        cursor = conn.cursor()
+        if _is_postgres():
+            cursor.execute("SELECT 1")
+        else:
+            cursor.execute("SELECT 1")
+        row = cursor.fetchone()
+        ok = bool(row and row[0] == 1)
+        return {"ok": ok, "backend": "postgres" if _is_postgres() else "sqlite"}
+    except Exception as exc:
+        return {"ok": False, "backend": "postgres" if _is_postgres() else "sqlite", "error": str(exc)}
+    finally:
+        if conn is not None:
+            _release_conn(conn)
+
 def get_idempotency(node_id: str, endpoint: str, idem_key: str) -> Optional[dict]:
     conn = _get_conn()
     cursor = conn.cursor()
@@ -509,6 +527,18 @@ def set_idempotency(node_id: str, endpoint: str, idem_key: str, response: dict, 
         )
     conn.commit()
     _release_conn(conn)
+
+def delete_idempotency_before(cutoff_ts: float) -> int:
+    conn = _get_conn()
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute("DELETE FROM idempotency WHERE created_at < %s", (cutoff_ts,))
+    else:
+        cursor.execute("DELETE FROM idempotency WHERE created_at < ?", (cutoff_ts,))
+    deleted = cursor.rowcount
+    conn.commit()
+    _release_conn(conn)
+    return int(deleted or 0)
 
 def upsert_registry(node_id: str, alias: Optional[str], skills: list[str], models: list[str], metadata: dict, availability: str, updated_at: float, x25519_public_key: Optional[str] = None):
     conn = _get_conn()

@@ -146,7 +146,7 @@ From any machine, test the Hub:
 # Check if the Hub is responding
 curl https://mep-hub.silentcopilot.ai/
 
-# Expected response: FastAPI JSON with title "Chronos Protocol L1 Hub"
+# Expected response: FastAPI JSON with title "MEP Hub"
 ```
 
 ---

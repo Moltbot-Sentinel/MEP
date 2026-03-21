@@ -1,10 +1,12 @@
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, Header, Depends
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
 from typing import Dict, List, Optional
 import asyncio
 import uuid
 import time
 import json
+import ipaddress
 from datetime import datetime
 import os
 import ctypes
@@ -16,7 +18,7 @@ from logger import log_event, log_audit
 
 from models import NodeRegistration, TaskCreate, TaskResult, TaskBid, TaskCancel, RegistryUpdate, AvailabilityUpdate, RegistryHeartbeat, ReputationSubmit, DisputeOpen, DisputeResolve, FederationPeerUpsert
 
-app = FastAPI(title="Chronos Protocol L1 Hub", description="The Time Exchange Clearinghouse", version="0.1.2")
+app = FastAPI(title="MEP Hub", description="The Time Exchange Clearinghouse", version="0.1.2")
 
 # In-memory storage for active tasks
 active_tasks: Dict[str, dict] = {}
@@ -32,14 +34,60 @@ RATE_LIMIT_MAX = 50
 
 def get_hub_urls(request: Request) -> tuple:
     """Get correct Hub and WebSocket URLs for clients."""
-    forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", "").lower().strip()
     base_url = str(request.base_url).rstrip("/")
-    if forwarded_proto:
+    if TRUST_PROXY_PROTO and forwarded_proto in ("http", "https"):
         base_url = base_url.replace("http://", f"{forwarded_proto}://", 1).replace("https://", f"{forwarded_proto}://", 1)
     ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://")
     return base_url, ws_url
 MAX_SKEW_SECONDS = 300
 ALLOWED_IPS = [ip.strip() for ip in os.getenv("MEP_ALLOWED_IPS", "").split(",") if ip.strip()]
+REQUIRE_TLS = os.getenv("MEP_REQUIRE_TLS", "false").lower() in ("1", "true", "yes")
+TRUST_PROXY_PROTO = os.getenv("MEP_TRUST_PROXY_PROTO", "true").lower() in ("1", "true", "yes")
+TRUST_PROXY_CLIENT_IP = os.getenv("MEP_TRUST_PROXY_CLIENT_IP", "false").lower() in ("1", "true", "yes")
+TRUSTED_HOSTS = {
+    item.strip().lower()
+    for item in os.getenv("MEP_TRUSTED_HOSTS", "").split(",")
+    if item.strip()
+}
+
+
+def _build_trusted_host_rules(values: set[str]) -> tuple[set[str], list[str]]:
+    exact: set[str] = set()
+    wildcard_suffixes: list[str] = []
+    for value in values:
+        normalized = value.strip().lower().strip(".")
+        if not normalized:
+            continue
+        if normalized.startswith("*.") and len(normalized) > 2:
+            wildcard_suffixes.append(normalized[2:])
+            continue
+        exact.add(normalized)
+    return exact, wildcard_suffixes
+
+
+TRUSTED_HOSTS_EXACT, TRUSTED_HOSTS_WILDCARD_SUFFIXES = _build_trusted_host_rules(TRUSTED_HOSTS)
+
+
+def _build_allowed_ip_rules(values: list[str]) -> tuple[set[str], list]:
+    exact: set[str] = set()
+    networks: list = []
+    for value in values:
+        normalized = value.strip()
+        if not normalized:
+            continue
+        try:
+            if "/" in normalized:
+                networks.append(ipaddress.ip_network(normalized, strict=False))
+                continue
+            exact.add(str(ipaddress.ip_address(normalized)))
+            continue
+        except ValueError:
+            exact.add(normalized.lower())
+    return exact, networks
+
+
+ALLOWED_IP_EXACT, ALLOWED_IP_NETWORKS = _build_allowed_ip_rules(ALLOWED_IPS)
 REQUEUE_ASSIGNED_ON_START = os.getenv("MEP_REQUEUE_ASSIGNED_ON_START", "false").lower() in ("1", "true", "yes")
 ADMIN_KEY = os.getenv("MEP_ADMIN_KEY")
 DISPUTE_WINDOW_SECONDS = int(os.getenv("MEP_DISPUTE_WINDOW_SECONDS", "86400"))
@@ -47,6 +95,10 @@ DISPUTE_REASON_MIN_CHARS = int(os.getenv("MEP_DISPUTE_REASON_MIN_CHARS", "10"))
 DISPUTE_REASON_MAX_CHARS = int(os.getenv("MEP_DISPUTE_REASON_MAX_CHARS", "500"))
 ASSIGNMENT_TIMEOUT_SECONDS = int(os.getenv("MEP_ASSIGNMENT_TIMEOUT_SECONDS", "3600"))
 ASSIGNMENT_SWEEP_INTERVAL_SECONDS = int(os.getenv("MEP_ASSIGNMENT_SWEEP_INTERVAL_SECONDS", "60"))
+MAINTENANCE_SWEEP_INTERVAL_SECONDS = int(os.getenv("MEP_MAINTENANCE_SWEEP_INTERVAL_SECONDS", "60"))
+COMPLETED_TASK_CACHE_TTL_SECONDS = int(os.getenv("MEP_COMPLETED_TASK_CACHE_TTL_SECONDS", "3600"))
+COMPLETED_TASK_CACHE_MAX_ITEMS = int(os.getenv("MEP_COMPLETED_TASK_CACHE_MAX_ITEMS", "1000"))
+IDEMPOTENCY_TTL_SECONDS = int(os.getenv("MEP_IDEMPOTENCY_TTL_SECONDS", "86400"))
 TIMEOUT_POLICY = os.getenv("MEP_TIMEOUT_POLICY", "refund").lower()
 VALID_AVAILABILITY = {"online", "idle", "busy", "offline", "unknown"}
 DEFAULT_REGISTRY_MAX_AGE_MINUTES = float(os.getenv("MEP_REGISTRY_MAX_AGE_MINUTES", "0") or "0")
@@ -73,33 +125,160 @@ FEDERATION_SEED_PEERS = {
 }
 federation_peer_lock = asyncio.Lock()
 dynamic_federation_peers: set[str] = set()
-active_db_tasks = db.get_active_tasks()
-if REQUEUE_ASSIGNED_ON_START and active_db_tasks:
-    now = time.time()
+
+
+def _request_proto(request: Request) -> str:
+    forwarded_proto = request.headers.get("X-Forwarded-Proto", "").lower().strip()
+    if TRUST_PROXY_PROTO and forwarded_proto in ("http", "https"):
+        return forwarded_proto
+    return request.url.scheme.lower()
+
+
+def _extract_client_ip(raw_client_host: Optional[str], forwarded_for: Optional[str]) -> Optional[str]:
+    if TRUST_PROXY_CLIENT_IP and forwarded_for:
+        first = forwarded_for.split(",", 1)[0]
+        normalized_first = _normalize_client_endpoint(first)
+        if normalized_first:
+            return normalized_first
+    return _normalize_client_endpoint(raw_client_host)
+
+
+def _normalize_client_endpoint(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    normalized = value.strip().lower().strip('"')
+    if not normalized:
+        return None
+    if normalized.startswith("[") and "]" in normalized:
+        return normalized[1:normalized.index("]")]
+    parts = normalized.rsplit(":", 1)
+    if len(parts) == 2 and parts[1].isdigit() and "." in parts[0]:
+        return parts[0]
+    return normalized
+
+
+def _request_client_ip(request: Request) -> Optional[str]:
+    raw_client_host = request.client.host if request.client else None
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    return _extract_client_ip(raw_client_host, forwarded_for)
+
+
+def _websocket_client_ip(websocket: WebSocket) -> Optional[str]:
+    raw_client_host = websocket.client.host if websocket.client else None
+    forwarded_for = websocket.headers.get("X-Forwarded-For", "")
+    return _extract_client_ip(raw_client_host, forwarded_for)
+
+
+def _normalize_host_header(host_value: Optional[str]) -> Optional[str]:
+    if not host_value:
+        return None
+    normalized = host_value.strip().lower()
+    if normalized.startswith("[") and "]" in normalized:
+        return normalized[1:normalized.index("]")]
+    return normalized.split(":", 1)[0]
+
+
+def _is_trusted_host(host_value: Optional[str]) -> bool:
+    if not TRUSTED_HOSTS:
+        return True
+    normalized = _normalize_host_header(host_value)
+    if not normalized:
+        return False
+    normalized = normalized.rstrip(".")
+    if normalized in TRUSTED_HOSTS_EXACT:
+        return True
+    return any(normalized.endswith(f".{suffix}") for suffix in TRUSTED_HOSTS_WILDCARD_SUFFIXES)
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    if not _is_trusted_host(request.headers.get("host")):
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detail": "Untrusted Host header"},
+        )
+    proto = _request_proto(request)
+    if REQUIRE_TLS and proto != "https":
+        return JSONResponse(
+            status_code=426,
+            content={"status": "error", "detail": "TLS required. Use HTTPS/WSS via reverse proxy."},
+        )
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    if proto == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+def _normalize_error_detail(detail):
+    if isinstance(detail, (str, list, dict)):
+        return detail
+    return str(detail)
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"status": "error", "detail": _normalize_error_detail(exc.detail)}
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(_: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"status": "error", "detail": exc.errors()}
+    )
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(_: Request, exc: Exception):
+    log_event("unhandled_exception", str(exc))
+    return JSONResponse(
+        status_code=500,
+        content={"status": "error", "detail": "Internal server error"}
+    )
+
+async def _load_active_tasks_from_db():
+    active_db_tasks = db.get_active_tasks()
+    if REQUEUE_ASSIGNED_ON_START and active_db_tasks:
+        now = time.time()
+        for task in active_db_tasks:
+            if task["status"] == "assigned" and not task["target_node"]:
+                db.update_task_status(task["task_id"], "bidding", now)
+                log_event("task_requeued", f"Task {task['task_id'][:8]} requeued on startup", consumer_id=task["consumer_id"], task_id=task["task_id"], bounty=task["bounty"])
+    loaded_tasks = {}
     for task in active_db_tasks:
-        if task["status"] == "assigned" and not task["target_node"]:
-            db.update_task_status(task["task_id"], "bidding", now)
-            log_event("task_requeued", f"Task {task['task_id'][:8]} requeued on startup", consumer_id=task["consumer_id"], task_id=task["task_id"], bounty=task["bounty"])
-for task in active_db_tasks:
-    task_data = {
-        "id": task["task_id"],
-        "consumer_id": task["consumer_id"],
-        "payload": task["payload"],
-        "bounty": task["bounty"],
-        "status": task["status"],
-        "target_node": task["target_node"],
-        "model_requirement": task["model_requirement"],
-        "provider_id": task["provider_id"],
-        "payload_uri": task.get("payload_uri"),
-        "secret_data": task.get("result_payload")
-    }
-    active_tasks[task_data["id"]] = task_data
+        task_data = {
+            "id": task["task_id"],
+            "consumer_id": task["consumer_id"],
+            "payload": task["payload"],
+            "bounty": task["bounty"],
+            "status": task["status"],
+            "target_node": task["target_node"],
+            "model_requirement": task["model_requirement"],
+            "provider_id": task["provider_id"],
+            "payload_uri": task.get("payload_uri"),
+            "secret_data": task.get("result_payload")
+        }
+        loaded_tasks[task_data["id"]] = task_data
+    async with task_lock:
+        active_tasks.clear()
+        active_tasks.update(loaded_tasks)
 
 # --- IDENTITY VERIFICATION MIDDLEWARE ---
 def _is_allowed_ip(host: Optional[str]) -> bool:
     if not ALLOWED_IPS:
         return True
-    return host in ALLOWED_IPS
+    normalized = _normalize_client_endpoint(host)
+    if not normalized:
+        return False
+    if normalized in ALLOWED_IP_EXACT:
+        return True
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError:
+        return False
+    return any(address in network for network in ALLOWED_IP_NETWORKS)
 
 def _apply_rate_limit(key: str):
     now = time.time()
@@ -392,6 +571,39 @@ def _tail_lines(path: str, limit: int) -> list[str]:
 def _escape_html(value: str) -> str:
     return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+async def _evict_completed_tasks_cache():
+    now = time.time()
+    removed = 0
+    async with task_lock:
+        if COMPLETED_TASK_CACHE_TTL_SECONDS > 0:
+            expired = [
+                task_id
+                for task_id, data in completed_tasks.items()
+                if now - float(data.get("completed_at", now)) > COMPLETED_TASK_CACHE_TTL_SECONDS
+            ]
+            for task_id in expired:
+                del completed_tasks[task_id]
+            removed += len(expired)
+        if COMPLETED_TASK_CACHE_MAX_ITEMS > 0 and len(completed_tasks) > COMPLETED_TASK_CACHE_MAX_ITEMS:
+            overflow = len(completed_tasks) - COMPLETED_TASK_CACHE_MAX_ITEMS
+            oldest = sorted(
+                completed_tasks.items(),
+                key=lambda item: float(item[1].get("completed_at", 0.0))
+            )[:overflow]
+            for task_id, _ in oldest:
+                del completed_tasks[task_id]
+            removed += len(oldest)
+    if removed > 0:
+        log_event("completed_cache_evicted", f"Evicted {removed} completed task cache entries", removed=removed)
+
+def _sweep_idempotency_records():
+    if IDEMPOTENCY_TTL_SECONDS <= 0:
+        return
+    cutoff = time.time() - IDEMPOTENCY_TTL_SECONDS
+    removed = db.delete_idempotency_before(cutoff)
+    if removed > 0:
+        log_event("idempotency_cleaned", f"Removed {removed} expired idempotency records", removed=removed)
+
 async def _sweep_assigned_timeouts():
     if ASSIGNMENT_TIMEOUT_SECONDS <= 0:
         return
@@ -459,9 +671,36 @@ async def _assignment_timeout_worker():
             log_event("timeout_sweep_failed", f"Timeout sweep failed: {exc}")
         await asyncio.sleep(ASSIGNMENT_SWEEP_INTERVAL_SECONDS)
 
+async def _maintenance_worker():
+    while True:
+        try:
+            await _evict_completed_tasks_cache()
+            _sweep_idempotency_records()
+        except Exception as exc:
+            log_event("maintenance_sweep_failed", f"Maintenance sweep failed: {exc}")
+        await asyncio.sleep(max(1, MAINTENANCE_SWEEP_INTERVAL_SECONDS))
+
 @app.on_event("startup")
 async def start_timeout_worker():
+    await _load_active_tasks_from_db()
     asyncio.create_task(_assignment_timeout_worker())
+    asyncio.create_task(_maintenance_worker())
+    if REQUIRE_TLS:
+        log_event("transport_policy", "TLS enforcement enabled", require_tls=True, trust_proxy_proto=TRUST_PROXY_PROTO)
+    else:
+        log_event("transport_policy_warning", "TLS enforcement disabled", require_tls=False, trust_proxy_proto=TRUST_PROXY_PROTO)
+
+
+@app.on_event("shutdown")
+async def shutdown_hub():
+    async with node_lock:
+        sockets = list(connected_nodes.values())
+        connected_nodes.clear()
+    for socket in sockets:
+        try:
+            await socket.close(code=1001, reason="Hub shutting down")
+        except Exception:
+            pass
 
 def _read_recent_events(limit: int) -> list[dict]:
     path = _resolve_log_path("hub.json")
@@ -497,7 +736,7 @@ async def verify_request(
     x_mep_timestamp: str = Header(...),
     x_mep_signature: str = Header(...)
 ) -> str:
-    client_host = request.client.host if request.client else None
+    client_host = _request_client_ip(request)
     if not _is_allowed_ip(client_host):
         raise HTTPException(status_code=403, detail="Client IP not allowed")
 
@@ -505,7 +744,7 @@ async def verify_request(
     if len(body) > MAX_BODY_BYTES:
         raise HTTPException(status_code=413, detail="Payload too large")
 
-    _apply_rate_limit(f"{x_mep_nodeid}:{request.url.path}")
+    _apply_rate_limit(f"{x_mep_nodeid}:{client_host or 'unknown'}:{request.url.path}")
     _validate_timestamp(x_mep_timestamp)
 
     payload_str = body.decode('utf-8')
@@ -521,10 +760,10 @@ async def verify_request(
 
 @app.post("/register")
 async def register_node(node: NodeRegistration, request: Request):
-    client_host = request.client.host if request.client else None
+    client_host = _request_client_ip(request)
     if not _is_allowed_ip(client_host):
         raise HTTPException(status_code=403, detail="Client IP not allowed")
-    _apply_rate_limit(f"{client_host}:/register")
+    _apply_rate_limit(f"{client_host or 'unknown'}:/register")
     # Registration derives the Node ID from the provided Public Key PEM
     node_id = auth.derive_node_id(node.pubkey)
     balance = db.register_node(node_id, node.pubkey)
@@ -534,13 +773,7 @@ async def register_node(node: NodeRegistration, request: Request):
     log_event("node_registered", f"Node {node_id} registered with starting balance {balance}", node_id=node_id, starting_balance=balance)
     log_audit("REGISTER", node_id, balance, balance, "START_BONUS")
 
-    # Get correct Hub URLs for clients
-    forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
-    if forwarded_proto:
-        hub_url = str(request.base_url).replace(request.url.scheme, forwarded_proto, 1).rstrip("/")
-    else:
-        hub_url = str(request.base_url).rstrip("/")
-    ws_url = hub_url.replace("https://", "wss://").replace("http://", "ws://")
+    hub_url, ws_url = get_hub_urls(request)
 
     return {"status": "success", "node_id": node_id, "balance": balance, "hub_url": hub_url, "ws_url": ws_url}
 
@@ -997,10 +1230,12 @@ async def complete_task(
         task["status"] = "completed"
         task["provider_id"] = result.provider_id
         task["result"] = result_payload
+        task["completed_at"] = time.time()
         completed_tasks[result.task_id] = task
         if result.task_id in active_tasks:
             del active_tasks[result.task_id]
     db.update_task_result(result.task_id, result.provider_id, result_payload, "completed", time.time(), result_uri=normalized_result_uri)
+    await _evict_completed_tasks_cache()
 
     # ROUTE RESULT BACK TO CONSUMER VIA WEBSOCKET
     consumer_id = task["consumer_id"]
@@ -1129,7 +1364,21 @@ async def resolve_dispute(payload: DisputeResolve, x_mep_admin_key: Optional[str
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok"}
+    db_health = db.check_database_health()
+    async with node_lock:
+        online_count = len(connected_nodes)
+    async with task_lock:
+        active_count = len(active_tasks)
+        completed_count = len(completed_tasks)
+    return {
+        "status": "ok" if db_health.get("ok") else "degraded",
+        "database": db_health,
+        "metrics": {
+            "connected_nodes": online_count,
+            "active_tasks": active_count,
+            "completed_task_cache": completed_count
+        }
+    }
 
 @app.get("/logs/ledger_audit.log", response_class=PlainTextResponse)
 async def ledger_audit_log():
@@ -1258,15 +1507,38 @@ async def hub_landing(request: Request):
     return HTMLResponse(html)
 
 @app.websocket("/ws/{node_id}")
-async def websocket_endpoint(websocket: WebSocket, node_id: str, timestamp: str, signature: str):
-    client_host = websocket.client.host if websocket.client else None
+async def websocket_endpoint(
+    websocket: WebSocket,
+    node_id: str,
+    timestamp: Optional[str] = None,
+    signature: Optional[str] = None,
+    x_mep_timestamp: Optional[str] = Header(default=None),
+    x_mep_signature: Optional[str] = Header(default=None),
+):
+    client_host = _websocket_client_ip(websocket)
     if not _is_allowed_ip(client_host):
         await websocket.close(code=4003, reason="Client IP not allowed")
+        return
+    if not _is_trusted_host(websocket.headers.get("host")):
+        await websocket.close(code=1008, reason="Untrusted host")
+        return
+    ws_forwarded_proto = websocket.headers.get("X-Forwarded-Proto", "").lower().strip()
+    ws_proto = websocket.url.scheme.lower()
+    if TRUST_PROXY_PROTO and ws_forwarded_proto in ("http", "https"):
+        ws_proto = "wss" if ws_forwarded_proto == "https" else "ws"
+    if REQUIRE_TLS and ws_proto != "wss":
+        await websocket.close(code=1008, reason="TLS required")
+        return
+
+    ws_timestamp = x_mep_timestamp or timestamp
+    ws_signature = x_mep_signature or signature
+    if not ws_timestamp or not ws_signature:
+        await websocket.close(code=4004, reason="Missing authentication fields")
         return
 
     try:
         _apply_rate_limit(f"{node_id}:/ws")
-        _validate_timestamp(timestamp)
+        _validate_timestamp(ws_timestamp)
     except HTTPException as exc:
         await websocket.close(code=4004, reason=exc.detail)
         return
@@ -1276,7 +1548,7 @@ async def websocket_endpoint(websocket: WebSocket, node_id: str, timestamp: str,
         await websocket.close(code=4001, reason="Unknown Node ID")
         return
 
-    if not auth.verify_signature(pub_pem, node_id, timestamp, signature):
+    if not auth.verify_signature(pub_pem, node_id, ws_timestamp, ws_signature):
         await websocket.close(code=4002, reason="Invalid Signature")
         return
 
