@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   mep-hub:
     build: ./hub
@@ -11,7 +9,7 @@ services:
       - ./hub_data:/app/logs
     environment:
       - TZ=UTC
-      - MEP_DATABASE_URL=postgresql://mep:mep@postgres:5432/mep
+      - MEP_DATABASE_URL=${MEP_DATABASE_URL:?Set MEP_DATABASE_URL}
     depends_on:
       - postgres
 
@@ -20,13 +18,13 @@ services:
     container_name: mep-postgres
     restart: always
     environment:
-      - POSTGRES_USER=mep
-      - POSTGRES_PASSWORD=mep
-      - POSTGRES_DB=mep
+      - POSTGRES_USER=${POSTGRES_USER:-mep}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-mep}
     volumes:
       - ./hub_data/pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U mep -d mep"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5

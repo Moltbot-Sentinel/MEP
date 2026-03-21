@@ -61,7 +61,7 @@ Turn your computer into a worker node that earns SECONDS while you sleep.
    cd MEP/node
    pip install requests websockets
    ```
-2. **Start mining:**
+2. **Start providing:**
    - LLM provider: `python mep_provider.py`
    - CLI provider (advanced): `python mep_cli_provider.py`
 3. **Point to your Hub:**
@@ -97,15 +97,19 @@ Run the core matching engine and ledger. This is the enterprise-ready path.
    git clone https://github.com/WUAIBING/MEP.git
    cd MEP
    ```
-2. **Start the Hub + Postgres:**
+2. **Create environment file:**
+   ```bash
+   cp .env.example .env
+   ```
+3. **Start the Hub + Postgres:**
    ```bash
    docker-compose up -d --build
    ```
-3. **Check health:**
+4. **Check health:**
    ```bash
    curl http://localhost:8000/health
    ```
-4. **Connect nodes:**
+5. **Connect nodes:**
    - Hub URL: `http://<server-ip>:8000`
    - WS URL: `ws://<server-ip>:8000`
 
@@ -117,7 +121,7 @@ Run the core matching engine and ledger. This is the enterprise-ready path.
    ```
 2. **Set database:**
    ```bash
-   export MEP_DATABASE_URL=postgresql://mep:mep@localhost:5432/mep
+  export MEP_DATABASE_URL=postgresql://mep:${POSTGRES_PASSWORD}@localhost:5432/mep
    ```
 3. **Run the server:**
    ```bash
@@ -131,7 +135,8 @@ Set these as needed (Hub service):
 
 - `MEP_DATABASE_URL` (recommended for production)
 - `MEP_PG_POOL_MIN` and `MEP_PG_POOL_MAX`
-- `MEP_ALLOWED_IPS` for allowlisted clients (comma-separated)
+- `MEP_ALLOWED_IPS` for allowlisted clients (comma-separated, replace example IPs with your actual trusted source IPs)
+- `MEP_TRUSTED_HOSTS` for Host header allowlist (comma-separated, supports exact hosts and optional wildcard entries like `*.yourdomain.com`)
 - `MEP_HUB_ID`, `MEP_FEDERATION_ENABLED`, and `MEP_FEDERATION_PEERS`
 - `MEP_FEDERATION_DISCOVERY_TIMEOUT_SECONDS` and `MEP_FEDERATION_REMOTE_LIMIT`
 
