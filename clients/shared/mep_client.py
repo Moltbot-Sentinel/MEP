@@ -1,0 +1,118 @@
+import asyncio
+import json
+import os
+import time
+import urllib.parse
+from typing import Awaitable, Callable, Optional
+
+import requests
+import websockets
+
+from clients.shared.identity import MEPIdentity
+
+HUB_URL = os.getenv("HUB_URL", "https://mep-hub.silentcopilot.ai")
+WS_URL = os.getenv("WS_URL", "wss://mep-hub.silentcopilot.ai")
+
+
+class MEPClient:
+    def __init__(self, key_path: str):
+        self.identity = MEPIdentity(key_path)
+        self.node_id = self.identity.node_id
+        self.session = requests.Session()
+        self.task_channels: dict[str, str] = {}
+        self._stop = asyncio.Event()
+
+    async def register(self) -> dict:
+        response = await asyncio.to_thread(
+            self.session.post,
+            f"{HUB_URL}/register",
+            json={"pubkey": self.identity.pub_pem},
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def _auth_headers(self, payload_str: str) -> dict:
+        headers = self.identity.get_auth_headers(payload_str)
+        headers["Content-Type"] = "application/json"
+        return headers
+
+    async def submit_task(
+        self,
+        payload: str,
+        bounty: float,
+        model_requirement: Optional[str],
+        target_node: Optional[str],
+    ) -> dict:
+        body: dict = {
+            "consumer_id": self.node_id,
+            "payload": payload,
+            "bounty": bounty,
+        }
+        if model_requirement is not None:
+            body["model_requirement"] = model_requirement
+        if target_node is not None:
+            body["target_node"] = target_node
+        payload_str = json.dumps(body)
+        headers = self._auth_headers(payload_str)
+        response = await asyncio.to_thread(
+            self.session.post,
+            f"{HUB_URL}/tasks/submit",
+            data=payload_str,
+            headers=headers,
+            timeout=20,
+        )
+        return {"status_code": response.status_code, "json": response.json()}
+
+    async def cancel_task(self, task_id: str) -> dict:
+        body = {"task_id": task_id}
+        payload_str = json.dumps(body)
+        headers = self._auth_headers(payload_str)
+        response = await asyncio.to_thread(
+            self.session.post,
+            f"{HUB_URL}/tasks/cancel",
+            data=payload_str,
+            headers=headers,
+            timeout=20,
+        )
+        return {"status_code": response.status_code, "json": response.json()}
+
+    async def get_result(self, task_id: str) -> dict:
+        payload_str = ""
+        headers = self._auth_headers(payload_str)
+        response = await asyncio.to_thread(
+            self.session.get,
+            f"{HUB_URL}/tasks/result/{task_id}",
+            headers=headers,
+            timeout=20,
+        )
+        return {"status_code": response.status_code, "json": response.json()}
+
+    async def get_balance(self) -> dict:
+        payload_str = ""
+        headers = self._auth_headers(payload_str)
+        response = await asyncio.to_thread(
+            self.session.get,
+            f"{HUB_URL}/balance/{self.node_id}",
+            headers=headers,
+            timeout=20,
+        )
+        return {"status_code": response.status_code, "json": response.json()}
+
+    async def listen_results(self, on_result: Callable[[dict], Awaitable[None]]) -> None:
+        while not self._stop.is_set():
+            ts = str(int(time.time()))
+            sig = urllib.parse.quote(self.identity.sign(self.node_id, ts))
+            uri = f"{WS_URL}/ws/{self.node_id}?timestamp={ts}&signature={sig}"
+            try:
+                async with websockets.connect(uri) as ws:
+                    while not self._stop.is_set():
+                        msg = await ws.recv()
+                        data = json.loads(msg)
+                        if data.get("event") == "task_result":
+                            await on_result(data["data"])
+            except Exception:
+                await asyncio.sleep(2)
+
+    def stop(self) -> None:
+        self._stop.set()
