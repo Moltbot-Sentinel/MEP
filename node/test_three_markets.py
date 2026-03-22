@@ -106,8 +106,9 @@ async def test_three_markets():
                 print(f"👦 Bob: Received Data Market RFC {task_id[:8]} costing {cost} SECONDS")
                 
                 # Bob's local configuration allows him to spend up to 5.0 SECONDS
-                max_purchase_price = -5.0
-                if cost >= max_purchase_price:
+                max_purchase_price = 5.0
+                cost = abs(data["data"]["bounty"])
+                if cost <= max_purchase_price:
                     print("👦 Bob: Budget allows it! Bidding on premium data...")
                     bid_res = place_bid(bob, task_id)
                     if bid_res["status"] == "accepted":

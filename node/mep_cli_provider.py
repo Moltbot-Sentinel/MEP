@@ -1,10 +1,10 @@
-from typing import Optional, Dict, Any
 #!/usr/bin/env python3
 """
 MEP CLI Provider
-A specialized node that routes tasks to local autonomous CLI agents 
+A specialized node that routes tasks to local autonomous CLI agents
 (e.g., Aider, Claude-Code, Open-Interpreter).
 """
+from typing import Optional
 import asyncio
 import websockets
 import json
@@ -15,9 +15,7 @@ import os
 import shlex
 import aiohttp
 import urllib.parse
-
 import time
-import urllib.parse
 import tempfile
 from identity import MEPIdentity
 
@@ -235,7 +233,7 @@ class MEPCLIProvider:
         provider_id = result_data.get("provider_id", "unknown")
         result_payload = result_data.get("result_payload", "")
         
-        print(f"[CLI Provider] 🎉 TASK RESULT RECEIVED!")
+        print("[CLI Provider] 🎉 TASK RESULT RECEIVED!")
         print(f"  Task ID: {task_id}")
         print(f"  From Provider: {provider_id}")
         print(f"  Result: {result_payload[:100]}...")
@@ -327,15 +325,13 @@ class MEPCLIProvider:
             agent_cmd = os.getenv("MEP_CLI_AGENT_CMD")
             if agent_cmd:
                 if "{payload}" in agent_cmd:
-                    if os.name == "nt":
-                        cmd = agent_cmd.replace("{payload}", safe_payload)
-                    else:
-                        cmd = agent_cmd.replace("{payload}", safe_payload)
+                    # Substitute placeholder with quoted payload
+                    cmd = agent_cmd.replace("{payload}", safe_payload)
                 else:
-                    if os.name == "nt":
-                        cmd = f'{agent_cmd} "{safe_payload}"'
-                    else:
-                        cmd = f"{agent_cmd} {safe_payload}"
+                    # Append quoted payload to agent command
+                    cmd = f"{agent_cmd} {safe_payload}"
+                # Note: Full fix requires subprocess_exec + arg array instead of shell=True
+                # to prevent injection via agent_cmd path itself.
             
             print(f"\n[CLI Agent] Executing in {task_dir}:")
             print(f"$ {cmd[:100]}...\n")
