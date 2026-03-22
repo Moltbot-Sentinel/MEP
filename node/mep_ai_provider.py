@@ -142,10 +142,13 @@ class MEPAIProvider:
         bounty = rfc_data["bounty"]
         
         # Safety: Don't buy expensive data unless allowed
-        max_purchase_price = float(os.getenv("MEP_MAX_PURCHASE_PRICE", "0.0"))
-        if bounty < max_purchase_price:
-            print(f"[AI Provider] Ignored RFC {task_id[:8]} (Bounty {bounty} exceeds max purchase)")
-            return
+        # Negative bounty = data market (provider pays)
+        if bounty < 0:
+            max_purchase_price = float(os.getenv("MEP_MAX_PURCHASE_PRICE", "0.0"))
+            cost = abs(bounty)
+            if cost > max_purchase_price:
+                print(f"[AI Provider] Ignored RFC {task_id[:8]} (cost {cost:.6f} exceeds max {max_purchase_price:.6f})")
+                return
             
         print(f"[AI Provider] Received RFC {task_id[:8]} for {bounty:.6f} SECONDS. Placing bid...")
         

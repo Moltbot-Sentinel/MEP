@@ -13,3 +13,10 @@ hub_data/
 .env
 .env.*
 !.env.example
+
+# Execution artifacts
+provider.log
+temp_script.py
+temp_script.sh
+inbox.jsonl
+results.jsonl

@@ -327,15 +327,13 @@ class MEPCLIProvider:
             agent_cmd = os.getenv("MEP_CLI_AGENT_CMD")
             if agent_cmd:
                 if "{payload}" in agent_cmd:
-                    if os.name == "nt":
-                        cmd = agent_cmd.replace("{payload}", safe_payload)
-                    else:
-                        cmd = agent_cmd.replace("{payload}", safe_payload)
+                    # Substitute placeholder with quoted payload
+                    cmd = agent_cmd.replace("{payload}", safe_payload)
                 else:
-                    if os.name == "nt":
-                        cmd = f'{agent_cmd} "{safe_payload}"'
-                    else:
-                        cmd = f"{agent_cmd} {safe_payload}"
+                    # Append quoted payload to agent command
+                    cmd = f"{agent_cmd} {safe_payload}"
+                # Note: Full fix requires subprocess_exec + arg array instead of shell=True
+                # to prevent injection via agent_cmd path itself.
             
             print(f"\n[CLI Agent] Executing in {task_dir}:")
             print(f"$ {cmd[:100]}...\n")
