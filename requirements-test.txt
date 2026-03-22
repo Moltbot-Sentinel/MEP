@@ -1,0 +1,10 @@
+pytest
+pytest-cov
+httpx
+ruff
+cryptography
+fastapi
+uvicorn
+pydantic
+python-dotenv
+requests

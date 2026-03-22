@@ -7,6 +7,17 @@ extend-exclude = ["**/__pycache__/*", "**/logs/*", "**/hub_data/*"]
 select = ["E", "F"]
 ignore = ["E501"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["hub", "node", "core", "skills"]
+
+[tool.coverage.run]
+source = ["hub", "node", "core", "skills"]
+omit = ["*/test_*", "*/tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+
 [tool.mypy]
 python_version = "3.10"
 ignore_missing_imports = true
