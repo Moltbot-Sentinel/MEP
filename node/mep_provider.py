@@ -85,12 +85,18 @@ class MEPProvider:
         """Phase 2: Evaluate Request For Compute and submit Bid."""
         task_id = rfc_data["id"]
         bounty = rfc_data["bounty"]
-        # SAFETY SWITCH: Prevent purchasing data unless explicitly allowed
-        max_purchase_price = 0.0 # Set to e.g., -5.0 to buy premium data
-        if bounty < max_purchase_price:
-            print(f"[MEP Provider {self.node_id}] Ignored RFC {task_id[:8]} (Bounty {bounty} exceeds max purchase price)")
-            return
-            
+
+        # Data market safety: negative bounty = provider pays to buy data
+        if bounty < 0:
+            max_purchase_price = float(os.getenv("MEP_MAX_PURCHASE_PRICE", "0.0"))
+            cost = abs(bounty)
+            if cost > max_purchase_price:
+                print(f"[MEP Provider {self.node_id}] Rejected data purchase {task_id[:8]} "
+                      f"(cost {cost:.6f} > budget {max_purchase_price:.6f})")
+                return
+            print(f"[MEP Provider {self.node_id}] Accepting data purchase {task_id[:8]} "
+                  f"for {cost:.6f} SECONDS (budget: {max_purchase_price:.6f})")
+
         print(f"[MEP Provider {self.node_id}] Received RFC {task_id[:8]} for {bounty:.6f} SECONDS. Placing bid...")
         
         # Place bid
