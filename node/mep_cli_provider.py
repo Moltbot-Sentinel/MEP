@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 MEP CLI Provider
-A specialized node that routes tasks to local autonomous CLI agents 
+A specialized node that routes tasks to local autonomous CLI agents
 (e.g., Aider, Claude-Code, Open-Interpreter).
 """
+from typing import Optional
 import asyncio
 import websockets
 import json
@@ -16,7 +17,6 @@ import aiohttp
 import urllib.parse
 import time
 import tempfile
-from typing import Optional
 from identity import MEPIdentity
 
 HUB_URL = os.getenv("HUB_URL", "https://mep-hub.silentcopilot.ai")

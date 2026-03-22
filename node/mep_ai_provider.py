@@ -6,6 +6,7 @@ Includes X25519 Encryption, Data Market Logic, and Autonomous Engineer Routing.
 """
 import asyncio
 import os
+import sys
 import json
 import subprocess
 import tempfile
@@ -67,7 +68,7 @@ class MEPAIProvider:
         os.makedirs(self.workspace_dir, exist_ok=True)
         
         # AI API configuration
-        self.ai_api_cmd = os.getenv("MEP_AI_AGENT_CMD", "python3 " + os.path.join(os.path.dirname(__file__), "mep_ai_agent.py"))
+        self.ai_api_cmd = os.getenv("MEP_AI_AGENT_CMD", sys.executable + " " + os.path.join(os.path.dirname(__file__), "mep_ai_agent.py"))
         
     async def connect(self):
         """Connect to MEP Hub and start mining."""
@@ -232,7 +233,7 @@ class MEPAIProvider:
                 cmd = self.ai_api_cmd.split()
                 if model_req == "cli-agent" or "engineer" in model_req:
                     print("[AI Provider] 🚀 Routing to Sentinel Engineer...")
-                    cmd = ["python3", os.path.join(os.path.dirname(__file__), "sentinel_engineer.py")]
+                    cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "sentinel_engineer_v2.py")]
                 
                 result = subprocess.run(
                     cmd,

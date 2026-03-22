@@ -133,6 +133,7 @@ class TestCodeExecutor(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("ZeroDivision", result.stderr)
 
+    @unittest.skipIf(sys.platform == "win32", "bash not available on Windows")
     def test_bash_echo(self):
         result = self.executor.execute('echo "test"', "bash")
         self.assertEqual(result.returncode, 0)
@@ -167,8 +168,9 @@ class TestCodeExecutor(unittest.TestCase):
 
     def test_file_isolation(self):
         """Code can't write outside sandbox."""
+        leak_path = os.path.join(tempfile.gettempdir(), "se_test_leak.txt")
         result = self.executor.execute(
-            'with open("/tmp/se_test_leak.txt", "w") as f: f.write("leak")',
+            f'with open("{leak_path.replace(chr(92), "/")}", "w") as f: f.write("leak")',
             "python"
         )
         # File might be created in sandbox, but not at /tmp/se_test_leak.txt

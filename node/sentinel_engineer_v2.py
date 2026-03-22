@@ -362,7 +362,12 @@ class CodeExecutor:
             return ExecResult("", f"Unsupported language: {language}", 1)
 
         ext = ".py" if language == "python" else ".sh"
-        cmd = ["python3", "script.py"] if language == "python" else ["bash", "script.sh"]
+        if language == "python":
+            cmd = [sys.executable, "script.py"]
+        elif language == "bash":
+            if sys.platform == "win32":
+                return ExecResult("", "Bash execution is not supported on Windows", 1)
+            cmd = ["bash", "script.sh"]
 
         # Create isolated workspace per execution
         work_dir = Path(tempfile.mkdtemp(dir=self._sandbox_base, prefix="se_"))
