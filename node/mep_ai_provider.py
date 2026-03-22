@@ -5,15 +5,10 @@ MEP AI Provider - For AI agents like Hub Sentinel (Gemini 3.1 Pro).
 Includes X25519 Encryption, Data Market Logic, and Autonomous Engineer Routing.
 """
 import asyncio
-import base64
 import os
-import sys
 import json
 import subprocess
 import tempfile
-import shutil
-from typing import Optional
-import aiohttp
 import websockets
 import requests
 import time
@@ -163,9 +158,9 @@ class MEPAIProvider:
             
             if resp.status_code == 200:
                 bid_data = resp.json()
-                print(f"[AI Provider] Bid accepted! Task assigned.")
+                print("[AI Provider] Bid accepted! Task assigned.")
                 # Process task
-                secret_data = bid_data.get("secret_data")
+                _secret_data = bid_data.get("secret_data")
                 # We need to manually inject the consumer key if it was passed in RFC or Task?
                 # Usually new_task event has it.
                 # Here we wait for new_task event or process immediately? 
@@ -183,7 +178,7 @@ class MEPAIProvider:
         """Execute the task using AI API."""
         task_id = task_data["id"]
         payload = task_data["payload"]
-        payload_uri = task_data.get("payload_uri")
+        _payload_uri = task_data.get("payload_uri")
         bounty = task_data["bounty"]
         model_req = task_data.get("model_requirement", "")
         consumer_pubkey_b64 = task_data.get("consumer_x25519_pubkey")
@@ -193,7 +188,7 @@ class MEPAIProvider:
         
         # --- Logic as Buyer (Consumer) ---
         if secret_data:
-            print(f"[AI Provider] 💾 Received SECRET data.")
+            print("[AI Provider] 💾 Received SECRET data.")
             if consumer_pubkey_b64: # Actually, this would be provider's key if I am consumer? 
                 # No, if I am consumer, I decrypt with MY private key.
                 # But here I am running as Provider.
@@ -209,7 +204,7 @@ class MEPAIProvider:
         
         if model_req == "data-purchase":
             # I am selling data.
-            print(f"[AI Provider] 📦 Data Purchase Request. Generating R2 Link...")
+            print("[AI Provider] 📦 Data Purchase Request. Generating R2 Link...")
             
             # Generate Presigned URL for a sample file
             r2_url = self.r2.generate_presigned_url("dataset_v1.zip")
@@ -223,12 +218,12 @@ class MEPAIProvider:
                 try:
                     encrypted_data = self.identity.encrypt_for_peer(consumer_pubkey_b64, payload_content)
                     ai_response = encrypted_data
-                    print(f"[AI Provider] ✅ R2 Link Encrypted for Consumer.")
+                    print("[AI Provider] ✅ R2 Link Encrypted for Consumer.")
                 except Exception as e:
                     print(f"[AI Provider] Encryption failed: {e}")
                     ai_response = "ERROR_ENCRYPTION_FAILED"
             else:
-                print(f"[AI Provider] ❌ No Consumer Public Key provided by Hub!")
+                print("[AI Provider] ❌ No Consumer Public Key provided by Hub!")
                 ai_response = "ERROR_NO_PUBKEY"
         
         else:
@@ -236,7 +231,7 @@ class MEPAIProvider:
             try:
                 cmd = self.ai_api_cmd.split()
                 if model_req == "cli-agent" or "engineer" in model_req:
-                    print(f"[AI Provider] 🚀 Routing to Sentinel Engineer...")
+                    print("[AI Provider] 🚀 Routing to Sentinel Engineer...")
                     cmd = ["python3", os.path.join(os.path.dirname(__file__), "sentinel_engineer.py")]
                 
                 result = subprocess.run(
@@ -249,7 +244,7 @@ class MEPAIProvider:
                 
                 if result.returncode == 0:
                     ai_response = result.stdout.strip()
-                    print(f"[AI Provider] ✅ AI response generated")
+                    print("[AI Provider] ✅ AI response generated")
                 else:
                     ai_response = f"AI API error: {result.stderr}"
                     print(f"[AI Provider] ❌ AI API failed: {result.stderr}")

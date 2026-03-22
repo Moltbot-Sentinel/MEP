@@ -22,7 +22,7 @@ import logging
 import subprocess
 import tempfile
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 from pathlib import Path
@@ -184,7 +184,7 @@ class MiniMaxProvider(BaseProvider):
         messages = [{"role": m["role"], "content": m["content"]} for m in history]
         messages.append({"role": "user", "content": prompt})
         resp = requests.post(
-            f"https://api.minimax.chat/v1/text/chatcompletion_pro",
+            "https://api.minimax.chat/v1/text/chatcompletion_pro",
             params={"GroupId": self.group_id},
             headers={"Authorization": f"Bearer {self.api_key}"},
             json={

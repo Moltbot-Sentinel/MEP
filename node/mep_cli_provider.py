@@ -1,4 +1,3 @@
-from typing import Optional, Dict, Any
 #!/usr/bin/env python3
 """
 MEP CLI Provider
@@ -15,10 +14,9 @@ import os
 import shlex
 import aiohttp
 import urllib.parse
-
 import time
-import urllib.parse
 import tempfile
+from typing import Optional
 from identity import MEPIdentity
 
 HUB_URL = os.getenv("HUB_URL", "https://mep-hub.silentcopilot.ai")
@@ -235,7 +233,7 @@ class MEPCLIProvider:
         provider_id = result_data.get("provider_id", "unknown")
         result_payload = result_data.get("result_payload", "")
         
-        print(f"[CLI Provider] 🎉 TASK RESULT RECEIVED!")
+        print("[CLI Provider] 🎉 TASK RESULT RECEIVED!")
         print(f"  Task ID: {task_id}")
         print(f"  From Provider: {provider_id}")
         print(f"  Result: {result_payload[:100]}...")
