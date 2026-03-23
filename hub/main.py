@@ -1012,8 +1012,8 @@ async def submit_task(
                 async with node_lock:
                     if connected_nodes.get(task.target_node) is target_ws:
                         del connected_nodes[task.target_node]
-                return {"status": "error", "detail": "Target node disconnected"}
-        return {"status": "error", "detail": "Target node not currently connected to Hub"}
+                raise HTTPException(status_code=409, detail="Target node disconnected")
+        raise HTTPException(status_code=404, detail="Target node not currently connected to Hub")
 
     model_requirement = _normalize_model_requirement(task.model_requirement)
     rfc_data = {
