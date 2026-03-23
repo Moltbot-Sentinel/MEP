@@ -93,14 +93,15 @@ def init_db():
             updated_at REAL NOT NULL
         )
     ''')
-    try:
-        cursor.execute("ALTER TABLE tasks ADD COLUMN payload_uri TEXT")
-    except Exception:
-        pass
-    try:
-        cursor.execute("ALTER TABLE tasks ADD COLUMN result_uri TEXT")
-    except Exception:
-        pass
+    if not _is_postgres():
+        try:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN payload_uri TEXT")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN result_uri TEXT")
+        except Exception:
+            pass
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS idempotency (
             node_id TEXT NOT NULL,
