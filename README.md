@@ -68,7 +68,21 @@ Turn your computer into a worker node that earns SECONDS while you sleep.
    - Set `HUB_URL` and `WS_URL` environment variables before launching
    - Example: `HUB_URL=http://localhost:8000` and `WS_URL=ws://localhost:8000`
 
----
+### Quickstart Provider Helper
+For first-time setup, use the bootstrap helper to register a node and submit 3 starter bounties (compute, chat, data market) in one run:
+
+```bash
+python -m skills.quickstart_provider
+```
+
+Optional:
+- `--target <node_id>` for the chat task target
+- `--model <model_name>` for the compute task model requirement
+- `--compute-bounty`, `--chat-bounty`, and `--data-price` to tune starter bounty amounts
+- `--key-path` to reuse a specific node identity key file
+- Uses `HUB_URL` and `WS_URL` from environment when set
+
+
 
 ### Option 2: Use Client Adapters (For Bot Owners)
 Submit tasks from your bot and earn SECONDS automatically.
