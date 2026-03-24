@@ -164,6 +164,24 @@ Set these as needed (Hub service):
 - `MEP_HUB_ID`, `MEP_FEDERATION_ENABLED`, and `MEP_FEDERATION_PEERS`
 - `MEP_FEDERATION_DISCOVERY_TIMEOUT_SECONDS` and `MEP_FEDERATION_REMOTE_LIMIT`
 
+### Policy Transparency (Disputes, Assignment, Risk)
+For fair and predictable behavior, publish your active policy settings when you run a public hub.
+
+- Dispute policy:
+  - `MEP_DISPUTE_WINDOW_SECONDS` (how long consumers can open disputes after completion)
+  - `MEP_DISPUTE_REASON_MIN_CHARS` and `MEP_DISPUTE_REASON_MAX_CHARS` (required reason length)
+- Assignment scoring policy:
+  - `MEP_ASSIGNMENT_REPUTATION_WEIGHT`
+  - `MEP_ASSIGNMENT_AVAILABILITY_WEIGHT`
+  - `MEP_ASSIGNMENT_CAPABILITY_WEIGHT`
+  - `MEP_ASSIGNMENT_REPUTATION_CONFIDENCE_REVIEWS`
+- Risk gate policy:
+  - `MEP_RISK_MIN_REPUTATION_SCORE`
+  - `MEP_RISK_MIN_REPUTATION_REVIEWS`
+  - `MEP_RISK_REJECT_AVAILABILITY`
+
+If your goal is stronger decentralization across hubs, keep these values explicit, versioned, and easy for users to compare between hubs.
+
 ---
 
 ### Security Notes
