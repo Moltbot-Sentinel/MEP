@@ -167,6 +167,15 @@ def init_db():
             resolved_at REAL
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pending_dms (
+            task_id TEXT PRIMARY KEY,
+            consumer_id TEXT NOT NULL,
+            target_node TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            created_at REAL NOT NULL
+        )
+    ''')
     conn.commit()
     _release_conn(conn)
 
@@ -968,5 +977,48 @@ def resolve_dispute(task_id: str, resolution: str, resolved_at: float) -> bool:
     conn.commit()
     _release_conn(conn)
     return updated > 0
+
+def queue_offline_dm(task_id: str, consumer_id: str, target_node: str, payload: str, created_at: float) -> None:
+    conn = _get_conn()
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute(
+            "INSERT INTO pending_dms (task_id, consumer_id, target_node, payload, created_at) VALUES (%s, %s, %s, %s, %s)",
+            (task_id, consumer_id, target_node, payload, created_at)
+        )
+    else:
+        cursor.execute(
+            "INSERT INTO pending_dms (task_id, consumer_id, target_node, payload, created_at) VALUES (?, ?, ?, ?, ?)",
+            (task_id, consumer_id, target_node, payload, created_at)
+        )
+    conn.commit()
+    _release_conn(conn)
+
+def get_pending_dms(target_node: str) -> list:
+    conn = _get_conn()
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute(
+            "SELECT task_id, consumer_id, target_node, payload, created_at FROM pending_dms WHERE target_node = %s ORDER BY created_at ASC",
+            (target_node,)
+        )
+    else:
+        cursor.execute(
+            "SELECT task_id, consumer_id, target_node, payload, created_at FROM pending_dms WHERE target_node = ? ORDER BY created_at ASC",
+            (target_node,)
+        )
+    rows = cursor.fetchall()
+    _release_conn(conn)
+    return [_row_to_dict(cursor, row) for row in rows]
+
+def delete_pending_dm(task_id: str) -> None:
+    conn = _get_conn()
+    cursor = conn.cursor()
+    if _is_postgres():
+        cursor.execute("DELETE FROM pending_dms WHERE task_id = %s", (task_id,))
+    else:
+        cursor.execute("DELETE FROM pending_dms WHERE task_id = ?", (task_id,))
+    conn.commit()
+    _release_conn(conn)
 
 init_db()
