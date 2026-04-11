@@ -676,6 +676,9 @@ async def _maintenance_worker():
         try:
             await _evict_completed_tasks_cache()
             _sweep_idempotency_records()
+            removed = db.cleanup_expired_pending_dms()
+            if removed > 0:
+                log_event("pending_dms_cleaned", f"Removed {removed} expired pending DMs", removed=removed)
         except Exception as exc:
             log_event("maintenance_sweep_failed", f"Maintenance sweep failed: {exc}")
         await asyncio.sleep(max(1, MAINTENANCE_SWEEP_INTERVAL_SECONDS))

@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import json
+import time
 from typing import Optional
 
 try:
@@ -175,6 +176,11 @@ def init_db():
             payload TEXT NOT NULL,
             created_at REAL NOT NULL
         )
+    ''')
+    # Index for efficient lookup of pending DMs by target node + ordering by creation time
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_pending_dms_target_created
+        ON pending_dms (target_node, created_at)
     ''')
     conn.commit()
     _release_conn(conn)
@@ -1020,5 +1026,23 @@ def delete_pending_dm(task_id: str) -> None:
         cursor.execute("DELETE FROM pending_dms WHERE task_id = ?", (task_id,))
     conn.commit()
     _release_conn(conn)
+
+PENDING_DM_TTL_SECONDS = float(os.getenv("MEP_PENDING_DM_TTL_SECONDS", "86400"))  # Default 24h
+
+def cleanup_expired_pending_dms() -> int:
+    """Remove pending DMs older than PENDING_DM_TTL_SECONDS. Returns count of removed entries."""
+    if PENDING_DM_TTL_SECONDS <= 0:
+        return 0
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cutoff = time.time() - PENDING_DM_TTL_SECONDS
+    if _is_postgres():
+        cursor.execute("DELETE FROM pending_dms WHERE created_at < %s", (cutoff,))
+    else:
+        cursor.execute("DELETE FROM pending_dms WHERE created_at < ?", (cutoff,))
+    removed = cursor.rowcount
+    conn.commit()
+    _release_conn(conn)
+    return removed
 
 init_db()
