@@ -1566,6 +1566,7 @@ async def websocket_endpoint(
     db.update_registry_availability(node_id, "online", time.time())
     # Deliver any DMs that were queued while this node was offline
     pending_dms = db.get_pending_dms(node_id)
+    failed_deliveries = 0
     for dm in pending_dms:
         try:
             delivery = {
@@ -1585,7 +1586,11 @@ async def websocket_endpoint(
             log_event("dm_delivered_online", f"Queued DM {dm['task_id'][:8]} delivered to {node_id}", task_id=dm["task_id"])
         except Exception as exc:
             log_event("dm_delivery_failed", f"Failed to deliver queued DM to {node_id}: {exc}", task_id=dm["task_id"])
-            break
+            failed_deliveries += 1
+            # continue to deliver remaining DMs instead of dropping them on first failure
+            if failed_deliveries >= 3:
+                log_event("dm_delivery_aborted", f"Too many consecutive failures ({failed_deliveries}), aborting pending DM delivery for {node_id}", node_id=node_id)
+                break
     try:
         while True:
             await websocket.receive_text()
