@@ -1584,6 +1584,7 @@ async def websocket_endpoint(
             await websocket.send_json(delivery)
             db.delete_pending_dm(dm["task_id"])
             log_event("dm_delivered_online", f"Queued DM {dm['task_id'][:8]} delivered to {node_id}", task_id=dm["task_id"])
+            failed_deliveries = 0  # reset after successful delivery
         except Exception as exc:
             log_event("dm_delivery_failed", f"Failed to deliver queued DM to {node_id}: {exc}", task_id=dm["task_id"])
             failed_deliveries += 1
